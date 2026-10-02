@@ -1,0 +1,24 @@
+{
+  "name": "wargamer",
+  "version": "1.0.0",
+  "description": "Offline tactical wargaming trainer for young officers (minor and major ops) with NATO symbology, fog of war, objective assessment and instructor/student dashboards.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "node build.mjs --watch",
+    "test": "node scripts/test.mjs",
+    "typecheck": "tsc --noEmit",
+    "lan": "node server/lan-server.mjs"
+  },
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "milsymbol": "^3.0.4",
+    "preact": "^10.29.8"
+  }
+}

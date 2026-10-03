@@ -287,7 +287,9 @@ export function Planner(p: StepProps) {
     const tpl = TEMPLATES[key];
     const role: Role = key === 'RIFLE_SEC' && s.level !== 'PL' ? 'SP_PTL' : defaultRole(key);
     const isFound = FOUND_ROLES.has(role);
-    const parentId = isFound ? foundBy || (role === 'SCREEN' ? undefined : defaultFoundBy(plan, role, w)) : undefined;
+    // an explicit "Found by" choice wins (if that locality still exists), else the nearest suitable one
+    const chosen = foundBy && plan.units.some((x) => x.id === foundBy) ? foundBy : '';
+    const parentId = isFound ? chosen || (role === 'SCREEN' ? undefined : defaultFoundBy(plan, role, w)) : undefined;
     const u: PlacedUnit = { id: uid('u'), templateKey: key, label: slot.label, pos: w, facing: threatBearing(s, w), role, parentId };
     if (isAreaUnit(u)) u.area = defaultArea(u);
     commit((pl) => pl.units.push(u));

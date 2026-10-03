@@ -35,6 +35,81 @@ stores everything centrally in `server/data/db.json`. It has no dependencies and
 
 ---
 
+## Install & run
+
+WarGamer is one app that runs four ways. All of them work with **no internet connection**; pick whatever suits
+the classroom.
+
+### 1. Desktop app (Windows, macOS, Linux)
+
+Download the installer for your computer from the project's **GitHub Releases** page:
+
+| Computer | File | Notes |
+|---|---|---|
+| Windows 10 / 11 | `WarGamer-<ver>-setup-x64.exe` | Installer (Start menu + desktop shortcut). |
+| Windows, no install | `WarGamer-<ver>-portable-x64.exe` | Runs straight from a USB stick. |
+| macOS (Apple silicon / Intel) | `WarGamer-<ver>-mac-arm64.dmg` / `WarGamer-<ver>-mac-x64.dmg` | Drag to Applications. |
+| Linux | `WarGamer-<ver>-linux-x86_64.AppImage` / `WarGamer-<ver>-linux-amd64.deb` | `chmod +x` the AppImage and run it, or `sudo apt install ./WarGamer-*.deb`. |
+
+The builds are not code-signed. On Windows choose **More info → Run anyway** the first time. On macOS
+right-click the app → **Open** (or run `xattr -dr com.apple.quarantine /Applications/WarGamer.app`).
+
+The desktop app is the same WarGamer in its own window. Its data is kept in the app's data folder and survives
+updates: `%APPDATA%\WarGamer` (Windows), `~/Library/Application Support/WarGamer` (macOS) or
+`~/.config/WarGamer` (Linux). Use **Help → Open data folder** to find it, and take backups from
+**Data & settings** as usual. Menus: **View** (zoom, full screen **F11**), **Classroom** (see below),
+**Help** (user guide **F1**, about).
+
+### 2. Single file (portable)
+
+`dist/WarGamer.html` (also attached to every release) is the whole app in one file. Copy it anywhere and
+double-click it; it runs from `file://` in Chrome, Edge or Firefox. See *Quick start* above.
+
+### 3. Classroom on the LAN (shared database)
+
+- **From the desktop app:** **Classroom → Host classroom on LAN…** starts the built-in server on this computer
+  (port 8080, or the next free port). Your local classes, students, scenarios and exercises are copied into
+  the classroom database (records already there are kept), and the app shows the address students type into
+  Chrome or Edge, e.g. `http://192.168.1.10:8080`. Allow WarGamer through the firewall when asked.
+  While hosting, the instructor window uses the classroom database. **Stop hosting** returns to local data.
+  The classroom database (`<data folder>/classroom/db.json`) is kept and is used again the next time you host.
+- **Without the desktop app:** run `node server/lan-server.mjs` on any PC that has Node.js 18 or later
+  (see *Classroom LAN mode* above).
+
+### 4. Install as a web app (PWA)
+
+When WarGamer is opened over `http(s)://` (the LAN server or any static web host), Chrome and Edge can install
+it as an app with its own window and icon. Use the install icon in the address bar, or **Data & settings →
+App & version → Install as app**. A service worker keeps the app available offline and picks up a new
+version on the next reload after the server is updated. Browsers only allow installation from `https://`
+addresses or from `http://localhost`, so install it on the server PC itself; student PCs that reach the server
+by plain `http://<ip>` simply use it in a browser tab, or use the desktop app. If an installed copy is opened
+while the server is unreachable, it uses the data stored on that PC.
+
+### Building the apps from source
+
+```bash
+npm ci
+npm run build        # dist/WarGamer.html + PWA files (manifest.webmanifest, sw.js, icons/)
+npm run app          # run the desktop app from the source tree
+npm run dist:linux   # → release/*.AppImage, release/*.deb
+npm run dist:win     # → release/*-setup-x64.exe, release/*-portable-x64.exe
+npm run dist:mac     # → release/*.dmg, release/*.zip (x64 + arm64; needs macOS)
+npm run dist:all     # all of the above (needs macOS for the mac targets)
+```
+
+Build each platform on its own OS. On Linux the Windows *portable* target builds without Wine
+(`npx electron-builder --win portable -c.win.signAndEditExecutable=false`), but the NSIS installer needs Wine.
+The GitHub Actions workflow `.github/workflows/release.yml` builds all installers on Windows, macOS and Linux
+runners. Run it from the Actions tab to get them as build artifacts, or push a tag such as `v1.1.0` to publish
+a GitHub Release with every installer and the single-file app attached.
+
+Desktop app sources: `electron/` (main process, preload, user-guide renderer), `server/lan-core.cjs`
+(classroom server shared by the CLI and the desktop app), and `build/` (app icon: `icon.svg`, rendered to
+PNG by `build/render-icons.mjs`).
+
+---
+
 ## What it does
 
 ### Exercise flow (student)

@@ -1,7 +1,15 @@
 {
   "name": "wargamer",
+  "productName": "WarGamer",
   "version": "1.0.0",
   "description": "Offline tactical wargaming trainer for young officers (minor and major ops) with NATO symbology, fog of war, objective assessment and instructor/student dashboards.",
+  "author": {
+    "name": "WarGamer",
+    "email": "wargamer@localhost"
+  },
+  "homepage": "https://github.com/mehrsachal/WarGamer",
+  "main": "electron/main.cjs",
+  "desktopName": "wargamer.desktop",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,7 +17,12 @@
     "dev": "node build.mjs --watch",
     "test": "node scripts/test.mjs",
     "typecheck": "tsc --noEmit",
-    "lan": "node server/lan-server.mjs"
+    "lan": "node server/lan-server.mjs",
+    "app": "node build.mjs && electron .",
+    "dist:linux": "node build.mjs && electron-builder --linux --publish never",
+    "dist:win": "node build.mjs && electron-builder --win --publish never",
+    "dist:mac": "node build.mjs && electron-builder --mac --publish never",
+    "dist:all": "node build.mjs && electron-builder --linux --win --mac --publish never"
   },
   "license": "UNLICENSED",
   "devDependencies": {
@@ -25,5 +38,110 @@
     "milsymbol": "^3.0.4",
     "preact": "^10.29.8",
     "three": "^0.186.1"
+  },
+  "build": {
+    "appId": "pk.sit.wargamer",
+    "productName": "WarGamer",
+    "copyright": "School of Infantry & Tactics",
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/WarGamer.html",
+      "dist/manifest.webmanifest",
+      "dist/sw.js",
+      "dist/icons/**",
+      "electron/**",
+      "!electron/*.d.cts",
+      "server/lan-core.cjs",
+      "README.md",
+      "package.json",
+      "!**/node_modules/**"
+    ],
+    "asar": true,
+    "compression": "normal",
+    "publish": null,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "WarGamer",
+      "artifactName": "${productName}-${version}-setup-${arch}.${ext}"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-portable-${arch}.${ext}"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.education",
+      "icon": "build/icon.png",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "artifactName": "${productName}-${version}-mac-${arch}.${ext}"
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Education",
+      "icon": "build/icon.png",
+      "maintainer": "WarGamer <wargamer@localhost>",
+      "synopsis": "Offline tactical wargaming trainer",
+      "executableName": "wargamer",
+      "syncDesktopName": true
+    },
+    "deb": {
+      "artifactName": "${productName}-${version}-linux-${arch}.${ext}"
+    }
   }
 }

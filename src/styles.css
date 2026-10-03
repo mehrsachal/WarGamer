@@ -216,3 +216,8 @@ table.tbl { width: 100%; border-collapse: collapse; }
   .muted, .dim { color: #333; }
   .verdict-PASS, .verdict-BEST { color: #1b5e20; } .verdict-PARTIAL, .verdict-ACCEPTABLE { color: #8d6e00; } .verdict-FAIL, .verdict-WRONG, .verdict-POOR { color: #b71c1c; }
 }
+
+/* ==== v2-S6-app ==== */
+.wg-app-card .wg-app-ver { font-family: var(--font-cond); font-size: 18px; font-weight: 700; letter-spacing: 0.03em; }
+.wg-app-card .wg-app-note { background: rgba(66, 165, 245, 0.1); border: 1px solid rgba(66, 165, 245, 0.35); border-radius: 8px; padding: 8px 10px; }
+.wg-app-card .mono { word-break: break-all; }

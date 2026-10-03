@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- WarGamer app icon: NATO friendly infantry frame (the app's crossed-box logo) on a gridded map sheet. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#22303b"/>
+      <stop offset="1" stop-color="#0d1318"/>
+    </linearGradient>
+    <linearGradient id="fill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#9be9ff"/>
+      <stop offset="1" stop-color="#5fcdf2"/>
+    </linearGradient>
+    <clipPath id="tile"><rect x="64" y="64" width="896" height="896" rx="196"/></clipPath>
+  </defs>
+  <rect x="64" y="64" width="896" height="896" rx="196" fill="url(#bg)"/>
+  <g clip-path="url(#tile)">
+    <!-- map grid -->
+    <g stroke="#3d5363" stroke-width="6" opacity="0.75">
+      <path d="M224 0V1024M384 0V1024M544 0V1024M704 0V1024M864 0V1024"/>
+      <path d="M0 32H1024M0 192H1024M0 352H1024M0 512H1024M0 672H1024M0 832H1024M0 992H1024"/>
+    </g>
+    <!-- contours -->
+    <g fill="none" stroke="#7d9a4f" stroke-width="9" opacity="0.55" stroke-linecap="round">
+      <path d="M40 820C190 760 300 860 450 800S700 690 1000 760"/>
+      <path d="M40 900C220 850 330 930 500 880S760 800 1000 850"/>
+      <path d="M-20 200C150 250 260 140 420 170S640 120 780 90"/>
+    </g>
+  </g>
+  <g id="mark">
+    <!-- NATO friendly unit frame (1.5:1) with infantry cross; light halo keeps it legible on the dark sheet -->
+    <rect x="242" y="337" width="540" height="360" fill="none" stroke="#eaf8ff" stroke-width="50"/>
+    <rect x="242" y="337" width="540" height="360" fill="url(#fill)" stroke="#0b1a26" stroke-width="22"/>
+    <path d="M253 348L771 686M771 348L253 686" stroke="#0b1a26" stroke-width="24"/>
+    <!-- unit size indicator: company (I) -->
+    <rect x="497" y="230" width="30" height="76" fill="#f2b84b"/>
+    <!-- gold sighting brackets -->
+    <g fill="none" stroke="#f2b84b" stroke-width="22" stroke-linecap="square">
+      <path d="M168 272V200H240"/>
+      <path d="M856 272V200H784"/>
+      <path d="M168 772V844H240"/>
+      <path d="M856 772V844H784"/>
+    </g>
+  </g>
+</svg>

@@ -35,6 +35,7 @@ import type {
   SimUnit,
 } from './types';
 import { executeOrder } from './orders';
+import type { EngineAi } from './aiHooks';
 
 export interface EngineOptions {
   seed: number;
@@ -123,6 +124,8 @@ export class Engine {
   fireControl: 'DOCTRINE' | 'EARLY' | 'MIN' = 'DOCTRINE';
   light: LightState = 'DAY';
   vis = 1;
+  /** Optional enemy-commander controller (AI or replay); absent = rule-based Foxland. */
+  ai?: EngineAi;
 
   constructor(s: Scenario, plan: Plan, opts: EngineOptions) {
     this.s = s;

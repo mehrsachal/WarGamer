@@ -9,6 +9,7 @@ import { TEMPLATES } from '../core/units';
 import { alive, type Engine } from './engine';
 import type { SimUnit } from './types';
 import { newMission } from './fires';
+import { type RedChoice, type RedDecisionPoint, pickVal, ruleChoice } from './aiHooks';
 
 const ASSAULT_ROLES = new Set(['ASSAULT', 'RESERVE', 'TANKS', 'ENGR']);
 
@@ -68,7 +69,7 @@ function fdlY(e: Engine): number {
 }
 
 /** RED appreciation: pick the approach and objectives from what RED knows of BLUE. */
-export function planAttack(e: Engine, final: boolean): void {
+export function planAttack(e: Engine, final: boolean, force?: { approachId?: string; objId?: string }): void {
   const s = e.s;
   const ds = s.ds;
   const apchs = [...ds.approaches].sort((a, b) => a.pri - b.pri);
@@ -86,7 +87,9 @@ export function planAttack(e: Engine, final: boolean): void {
   });
   let idx = 0;
   const diff = e.opts.difficulty;
-  if (!final) idx = e.rng.chance(diff === 'HARD' ? 0.85 : 0.7) ? 0 : e.rng.int(0, apchs.length - 1);
+  const forced = force?.approachId ? apchs.findIndex((a) => a.id === force.approachId) : -1;
+  if (forced >= 0) idx = forced;
+  else if (!final) idx = e.rng.chance(diff === 'HARD' ? 0.85 : 0.7) ? 0 : e.rng.int(0, apchs.length - 1);
   else if (diff === 'HARD') idx = scores.indexOf(Math.max(...scores));
   else {
     const temp = diff === 'TRAINING' ? 0.9 : 0.5;
@@ -110,7 +113,9 @@ export function planAttack(e: Engine, final: boolean): void {
   const crossing = pointOn(a, fy, 0);
   const knownLoc = known.filter((k) => k.u.role === 'FDL' && k.u.kind === 'INF').sort((p, q) => dist(p.pos, crossing) - dist(q.pos, crossing));
   const objectives: { phase: number; pos: Vec; name: string; blueId?: string }[] = [];
-  for (const k of knownLoc.slice(0, 2)) objectives.push({ phase: 1, pos: k.pos, name: e.where(k.pos).replace(/^area /, ''), blueId: k.u.id });
+  const forcedObj = force?.objId ? known.find((k) => k.u.id === force.objId) : undefined;
+  const ph1 = forcedObj ? [forcedObj, ...knownLoc.filter((k) => k.u.id !== forcedObj.u.id && dist(k.pos, forcedObj.pos) < 1200).sort((p, q) => dist(p.pos, forcedObj.pos) - dist(q.pos, forcedObj.pos)).slice(0, 1)] : knownLoc.slice(0, 2);
+  for (const k of ph1) objectives.push({ phase: 1, pos: k.pos, name: e.where(k.pos).replace(/^area /, ''), blueId: k.u.id });
   if (objectives.length === 0) {
     // RED has not located the FDLs: attack the ground it expects to be held
     const guess = [...ds.itgs].filter((i) => Math.abs(i.pos.y - fy) < 600).sort((p, q) => dist(p.pos, crossing) - dist(q.pos, crossing))[0];
@@ -193,9 +198,16 @@ export function runRed(e: Engine): void {
     e.addLog('BOPs report en crossing the interstate bdry in strength.', 'warn');
   }
   const replanAt = e.hHour - (s.enemy.attackAtNight ? 330 : 300) - 15;
+  if (e.ai && !e.redPlanFinal && t === replanAt - 30) e.ai.redPrefetch?.(e, planDp(e));
   if (!e.redPlanFinal && t >= replanAt) {
-    planAttack(e, true);
-    e.marks.redPlanned = t;
+    if (!e.ai) {
+      planAttack(e, true);
+      e.marks.redPlanned = t;
+    } else {
+      const dp = planDp(e);
+      const ch = aiDecide(e, dp);
+      if (ch !== 'WAIT') applyPlanChoice(e, dp, ch);
+    }
   }
 
   // ---- entries
@@ -255,9 +267,12 @@ export function runRed(e: Engine): void {
     }
   }
 
+  // ---- feint (AI enemy commander only): a demonstration on another apch just before H hr
+  runFeint(e, red, fy);
+
   // ---- adv guard: drive in protective detachments, then break contact with the main posn
   for (const u of red.filter((x) => x.role === 'ADV_GUARD')) {
-    if (u.state === 'BROKEN' || u.state === 'WITHDRAW' || u.task.startsWith('Out of contact')) continue;
+    if (u.state === 'BROKEN' || u.state === 'WITHDRAW' || u.task.startsWith('Out of contact') || u.task === 'Feint') continue;
     const loss = u.phaseCas / Math.max(1, u.phaseStart);
     const attacked = (e.flags.screensAttacked as string[] | undefined) ?? [];
     const screens = knownBlueNear(e, u.pos, 1600, ['SCREEN', 'SP_PTL']).filter((b) => b.state !== 'WITHDRAW' && !attacked.includes(b.id));
@@ -279,6 +294,31 @@ export function runRed(e: Engine): void {
     }
     if (screens.length && u.state !== 'ASSAULT' && !u.targetId) {
       const sc = screens.sort((a, b) => dist(a.pos, u.pos) - dist(b.pos, u.pos))[0];
+      if (e.ai) {
+        const dp = screenDp(e, u, sc);
+        const ch = aiDecide(e, dp);
+        if (ch === 'WAIT') continue;
+        const act = ch.picks.act || 'ATTACK';
+        if (act === 'FIX' || act === 'BYPASS') {
+          const at = e.redIntel.get(sc.id)?.pos ?? sc.pos;
+          e.flags.screensAttacked = [...attacked, sc.id];
+          if (act === 'FIX') {
+            u.targetId = sc.id;
+            u.phaseStart = u.strength;
+            u.phaseCas = 0;
+            setPath(e, u, offsetBefore(sc.pos, u.pos, 600), { cover: 0.7 });
+            u.task = `Fixing screen ${e.where(sc.pos)}`;
+            e.flags[`fixUntil_${u.id}`] = t + 25;
+            redArty(e, at, 15, 'en arty on screens');
+            e.marks.screenAttacked = e.marks.screenAttacked ?? t;
+          } else {
+            setPath(e, u, u.objPos ?? pointOn(apch, fy, 300), { cover: 0.9 });
+            u.task = 'Adv guard — bypassing screen';
+            redArty(e, at, 5, 'en arty on screens');
+          }
+          continue;
+        }
+      }
       u.targetId = sc.id;
       u.phaseStart = u.strength;
       u.phaseCas = 0;
@@ -290,11 +330,20 @@ export function runRed(e: Engine): void {
     }
     if (u.targetId) {
       const tgt = e.byId.get(u.targetId);
+      const fixUntil = e.flags[`fixUntil_${u.id}`] as number | undefined;
       if (!tgt || !alive(tgt) || tgt.state === 'WITHDRAW' || dist(tgt.pos, u.pos) > 2200) {
         u.targetId = undefined;
         u.objPos = pointOn(apch, fy, 300);
         setPath(e, u, u.objPos, { cover: 0.6 });
         u.task = 'Adv guard — continuing adv';
+        if (fixUntil !== undefined) e.flags[`fixUntil_${u.id}`] = undefined;
+      } else if (fixUntil !== undefined && t >= fixUntil) {
+        // the screen has not given way under fire: assault it
+        e.flags[`fixUntil_${u.id}`] = undefined;
+        u.phaseStart = u.strength;
+        u.phaseCas = 0;
+        setPath(e, u, tgt.pos, { direct: true, state: 'ASSAULT' });
+        u.task = `Attk on screen ${e.where(tgt.pos)}`;
       }
     }
   }
@@ -343,6 +392,7 @@ export function runRed(e: Engine): void {
   // ---- assault management
   if (e.redPhase === 'ASSAULT1' || e.redPhase === 'ASSAULT2') manageAssault(e);
   if (e.redPhase === 'REORG1' && t >= (e.marks.reorgUntil ?? 0)) launchPhase(e, 2);
+  if (e.ai) reactToCatk(e, red);
 
   // ---- BOF: support from BOF posn
   for (const u of red.filter((x) => x.role === 'BOF')) {
@@ -519,8 +569,19 @@ function manageAssault(e: Engine): void {
   const consolidated = assault.filter((u) => alive(u) && u.state === 'CONSOLIDATE');
   if (live.length && live.every((u) => u.state === 'CONSOLIDATE')) {
     if (phase === 1) {
-      e.redPhase = 'REORG1';
-      e.marks.reorgUntil = e.t + 25;
+      let act = 'PH2_PLANNED';
+      if (e.ai) {
+        const ch = aiDecide(e, reorgDp(e, consolidated));
+        if (ch === 'WAIT') return;
+        act = ch.picks.act || act;
+      }
+      if (act === 'HOLD') {
+        e.redPhase = 'CONSOLIDATE';
+        e.marks.consolidated = e.t;
+      } else {
+        e.redPhase = 'REORG1';
+        e.marks.reorgUntil = e.t + (act === 'PH2_QUICK' ? 10 : 25);
+      }
       e.addLog(`En reorganising on ${[...new Set(consolidated.map((u) => e.where(u.pos)))].join(', ')}.`, 'warn');
     } else {
       e.redPhase = 'CONSOLIDATE';
@@ -530,6 +591,23 @@ function manageAssault(e: Engine): void {
   } else if (!live.length) {
     // every assaulting sub-unit has failed: second wave once (not in TRAINING), else give up
     const reserve = red.filter((u) => u.role === 'RESERVE' && alive(u));
+    let act = 'SECOND_WAVE';
+    if (phase === 1 && reserve.length && !e.flags.secondWave && e.opts.difficulty !== 'TRAINING' && e.ai) {
+      const ch = aiDecide(e, ph1FailDp(e, reserve.length, consolidated.length));
+      if (ch === 'WAIT') return;
+      act = ch.picks.act || act;
+      if (act === 'BREAK_OFF') {
+        e.flags.secondWave = true;
+        if (consolidated.length) {
+          e.redPhase = 'CONSOLIDATE';
+          e.marks.consolidated = e.t;
+        } else {
+          e.redPhase = 'FAILED';
+          e.marks.attackFailed = e.t;
+        }
+        return;
+      }
+    }
     if (phase === 1 && reserve.length && !e.flags.secondWave && e.opts.difficulty !== 'TRAINING') {
       e.flags.secondWave = true;
       e.flags.fupDelay = 0;
@@ -538,7 +616,8 @@ function manageAssault(e: Engine): void {
         r.phase = undefined;
       }
       e.redPhase = 'FUP';
-      e.hHour = e.t + 30;
+      e.hHour = e.t + (act === 'SECOND_WAVE_PREP' ? 45 : 30);
+      if (act === 'SECOND_WAVE_PREP') for (const o of e.redPlan.objectives.filter((x) => x.phase === 1)) redArty(e, (o.blueId ? e.redIntel.get(o.blueId)?.pos : undefined) ?? o.pos, 20, `en fresh bombardment on ${o.name}`, 'PREP');
       for (const r of reserve) {
         r.path = e.terrain.findPath(r.pos, e.redPlan.fup, 'FOOT', { preferCover: 0.8 });
         r.pathIdx = 0;
@@ -563,6 +642,240 @@ export function redPlanTextFinal(e: Engine): string[] {
   if (e.flags.secondWave) out.push('En committed his reserve in a second wave after the first assault failed.');
   if (e.redPhase === 'FAILED') out.push('The attk failed and the en withdrew.');
   if (e.redPhase === 'CONSOLIDATE') out.push('The en secured his objectives and consolidated.');
+  for (const n of (e.flags.enCdrNotes as string[] | undefined) ?? []) out.push(n);
   return out;
 }
 
+// ------------------------------------------------------------------ enemy commander decision points
+// Only used when a controller is attached (e.ai). Each builds a small enumerated menu from what
+// Foxland knows (redIntel) and applies the controller's pick; the rule-based default reproduces
+// the behaviour above. Nothing here consumes the RNG, so offline battles are unchanged.
+
+const ECH: Record<string, string> = { TEAM: 'Det', SEC: 'Sec', PL: 'Pl', COY: 'Coy', BN: 'Bn', BDE: 'Bde' };
+const ROLE_CODE: Record<string, string> = { FDL: 'fdl', DEPTH: 'dp', SCREEN: 'scn', SP_PTL: 'sp', LP: 'lp', RES: 'res', SP_WPN: 'wpn', CHQ: 'hq', CP: 'cp', OBS: 'obs', QC: 'qc', ENGR: 'pnr' };
+
+/** Compact place description ("15 r", "350NE Alipur", "155 735"). */
+export function shortWhere(e: Engine, p: Vec): string {
+  return e
+    .where(p)
+    .replace(/^area /, '')
+    .replace(/^(\d+) m ([NESW]+) of /, '$1$2 ')
+    .replace(/^GR /, '');
+}
+
+/** What Foxland knows of own posns, in a stable order. */
+function knownList(e: Engine): { u: SimUnit; pos: Vec; conf: number }[] {
+  const out: { u: SimUnit; pos: Vec; conf: number }[] = [];
+  for (const [id, v] of e.redIntel) {
+    const u = e.byId.get(id);
+    if (!u || !alive(u) || v.conf < 0.3) continue;
+    out.push({ u, pos: v.pos, conf: v.conf });
+  }
+  return out.sort((a, b) => a.pos.x - b.pos.x || a.pos.y - b.pos.y);
+}
+
+/** "fdl Pl@15 r c.8" */
+function knownText(e: Engine, k: { u: SimUnit; pos: Vec; conf: number }): string {
+  return `${ROLE_CODE[k.u.role as string] ?? 'posn'} ${ECH[k.u.echelon] ?? ''}@${shortWhere(e, k.pos)} c.${Math.min(9, Math.round(k.conf * 10))}`;
+}
+
+function aiDecide(e: Engine, dp: RedDecisionPoint): RedChoice | 'WAIT' {
+  const ch = e.ai ? e.ai.redDecide(e, dp) : ruleChoice(dp);
+  if (ch !== 'WAIT' && ch.src !== 'RULE' && ch.intent) {
+    const notes = ((e.flags.enCdrNotes as string[] | undefined) ?? []).slice();
+    notes.push(`En cdr (${e.timeStr()}): ${ch.intent}`);
+    e.flags.enCdrNotes = notes;
+  }
+  return ch;
+}
+
+function strengthLine(e: Engine): string {
+  const red = e.allRed().filter((u) => alive(u));
+  const inf = red.filter((u) => u.kind === 'INF' && u.role !== 'RECCE' && u.role !== 'BOF');
+  const tks = red.reduce((m, u) => m + u.vehicles, 0);
+  const pct = Math.round((100 * inf.reduce((m, u) => m + u.strength, 0)) / Math.max(1, inf.reduce((m, u) => m + u.start, 0)));
+  return `${inf.length} inf coys ${pct}%${tks ? `, ${tks} tks` : ''}`;
+}
+
+function pctOf(us: SimUnit[]): number {
+  return Math.round((100 * us.reduce((m, u) => m + u.strength, 0)) / Math.max(1, us.reduce((m, u) => m + u.start, 0)));
+}
+
+export function planDp(e: Engine): RedDecisionPoint {
+  const ds = e.s.ds;
+  const known = knownList(e);
+  const apchs = [...ds.approaches].sort((a, b) => a.pri - b.pri);
+  const apchOpts = apchs.map((a, i) => ({
+    id: `A${i + 1}`,
+    val: a.id,
+    text: `${a.name.replace(/ Apch$/, '')} tk:${a.tankGoing} own posns near:${known.filter((k) => distToPolyline(k.pos, a.path).d < 900).length}`,
+  }));
+  const locs = known.filter((k) => (k.u.role === 'FDL' || k.u.role === 'DEPTH') && k.u.kind === 'INF');
+  const others = known.filter((k) => !locs.includes(k)).slice(0, 6);
+  const night = e.s.enemy.attackAtNight;
+  return {
+    key: 'PLAN',
+    kind: 'PLAN',
+    sit: `Final attk plan. Planned H ${e.timeStr(e.hHour).replace(/ hrs$/, '')}${night ? ' (night)' : ''}. Force ${strengthLine(e)}.${others.length ? ` Also known: ${others.map((k) => knownText(e, k)).join('; ')}.` : ''}`,
+    groups: [
+      { name: 'apch', def: '', options: apchOpts },
+      { name: 'obj', def: '', options: [{ id: 'AUTO', text: 'nearest locality(s) to apch', val: '' }, ...locs.map((k, i) => ({ id: `L${i + 1}`, val: k.u.id, text: knownText(e, k) }))] },
+      { name: 'h', def: 'H0', options: ['H-15', 'H0', 'H+15', 'H+30'].map((id) => ({ id, text: id === 'H0' ? 'as planned' : `shift ${id.slice(1)} min` })) },
+      { name: 'feint', def: 'NONE', options: [{ id: 'NONE', text: 'no feint' }, ...apchOpts.map((o) => ({ id: `F${o.id}`, val: o.val, text: `adv gd feint on ${o.text.split(' tk:')[0]} at H-45` }))] },
+    ],
+  };
+}
+
+function applyPlanChoice(e: Engine, dp: RedDecisionPoint, ch: RedChoice): void {
+  const shift = ({ 'H-15': -15, 'H+15': 15, 'H+30': 30 } as Record<string, number>)[ch.picks.h ?? ''] ?? 0;
+  if (shift) e.hHour += shift;
+  const approachId = pickVal(dp, ch, 'apch') || undefined;
+  const objId = pickVal(dp, ch, 'obj') || undefined;
+  planAttack(e, true, approachId || objId ? { approachId, objId } : undefined);
+  const feint = pickVal(dp, ch, 'feint');
+  if (feint && feint !== 'NONE' && feint !== e.redPlan.approachId) e.flags.feint = { apchId: feint, at: e.hHour - 45, done: false };
+  e.marks.redPlanned = e.t;
+}
+
+function runFeint(e: Engine, red: SimUnit[], fy: number): void {
+  const f = e.flags.feint as { apchId: string; at: number; done: boolean } | undefined;
+  if (!f) return;
+  const a = approachById(e, f.apchId);
+  if (!f.done && e.t >= f.at) {
+    f.done = true;
+    const u =
+      red.find((x) => x.role === 'ADV_GUARD' && x.strength / x.start > 0.4 && x.state !== 'WITHDRAW' && x.state !== 'BROKEN') ??
+      red.find((x) => x.role === 'RECCE' && x.strength > 4 && !x.probing);
+    if (u) {
+      u.targetId = undefined;
+      u.phaseStart = u.strength;
+      u.phaseCas = 0;
+      setPath(e, u, pointOn(a, fy, 450), { cover: 0.5 });
+      u.task = 'Feint';
+    }
+    redArty(e, pointOn(a, fy, 0), 8, 'en arty (feint)');
+    return;
+  }
+  // feint party: hold at the demonstration line, then break clean once it has drawn fire
+  for (const u of red.filter((x) => x.task === 'Feint')) {
+    if ((u.state === 'HALT' && e.t > f.at + 25) || u.phaseCas / Math.max(1, u.phaseStart) > 0.3) {
+      setPath(e, u, pointOn(a, fy, 1600), { cover: 0.8 });
+      u.task = 'Out of contact — feint complete';
+    }
+  }
+}
+
+function screenDp(e: Engine, u: SimUnit, sc: SimUnit): RedDecisionPoint {
+  const k = knownList(e);
+  const sk = k.find((x) => x.u.id === sc.id);
+  const main = k.filter((x) => ['FDL', 'DEPTH'].includes(x.u.role as string));
+  return {
+    key: `SCREEN:${sc.id}`,
+    kind: 'SCREEN',
+    sit: `Adv gd ${pctOf([u])}% contacts own ${sk ? knownText(e, sk) : `screen@${shortWhere(e, sc.pos)}`}, ${Math.round(dist(u.pos, sc.pos) / 100) / 10} km. Main posn ${main.length ? `known: ${main.map((x) => knownText(e, x)).join('; ')}` : 'not yet located'}.`,
+    groups: [
+      {
+        name: 'act',
+        def: 'ATTACK',
+        options: [
+          { id: 'ATTACK', text: 'drive in the screen now, arty 10 min' },
+          { id: 'FIX', text: 'fix by fire from 600 m, arty 15 min, assault after 25 min if it holds' },
+          { id: 'BYPASS', text: 'bypass under cover, keep adv to locate main posn' },
+        ],
+      },
+    ],
+    focus: sc.pos,
+  };
+}
+
+function ph1FailDp(e: Engine, reserves: number, consolidated: number): RedDecisionPoint {
+  return {
+    key: 'PH1_FAIL',
+    kind: 'PH1_FAIL',
+    sit: `Ph 1 assault has failed${consolidated ? ` (${consolidated} sub-unit(s) hold a foothold)` : ''}. Force ${strengthLine(e)}; ${reserves} res coy(s) uncommitted. Own DF (SOS) ${e.marks.sosCalled ? 'active' : 'not seen'}.`,
+    groups: [
+      {
+        name: 'act',
+        def: 'SECOND_WAVE',
+        options: [
+          { id: 'SECOND_WAVE', text: 'commit res: fresh attk from FUP in 30 min' },
+          { id: 'SECOND_WAVE_PREP', text: 'commit res in 45 min after a fresh 20 min bombardment' },
+          { id: 'BREAK_OFF', text: consolidated ? 'break off, hold the foothold' : 'break off the attk, withdraw' },
+        ],
+      },
+    ],
+  };
+}
+
+function reorgDp(e: Engine, consolidated: SimUnit[]): RedDecisionPoint {
+  const k = knownList(e).filter((x) => x.u.role === 'DEPTH' || x.u.role === 'RES');
+  return {
+    key: 'REORG1',
+    kind: 'REORG1',
+    sit: `Ph 1 obj taken (${consolidated.length} sub-unit(s) ${pctOf(consolidated)}%). Force ${strengthLine(e)}. Own depth ${k.length ? k.map((x) => knownText(e, x)).join('; ') : 'not located'}. Own C attk likely.`,
+    groups: [
+      {
+        name: 'act',
+        def: 'PH2_PLANNED',
+        options: [
+          { id: 'PH2_PLANNED', text: 'reorg 25 min, then Ph 2 as planned' },
+          { id: 'PH2_QUICK', text: 'hasty reorg 10 min, Ph 2 before own C attk' },
+          { id: 'HOLD', text: 'no Ph 2: consolidate on Ph 1 obj' },
+        ],
+      },
+    ],
+  };
+}
+
+function reactToCatk(e: Engine, red: SimUnit[]): void {
+  const seen = (e.flags.catkSeen as string[] | undefined) ?? [];
+  for (const b of e.blue().filter((x) => x.catk && x.state === 'ASSAULT')) {
+    const key = `CATK:${b.id}`;
+    if (seen.includes(key)) continue;
+    const intel = e.redIntel.get(b.id);
+    if (!intel || intel.conf < 0.3) continue;
+    const threatened = red.filter((r) => (r.state === 'CONSOLIDATE' || r.state === 'ASSAULT') && r.kind === 'INF' && dist(r.pos, intel.pos) < 900);
+    if (!threatened.length) continue;
+    const reserves = red.filter((r) => (r.role === 'RESERVE' || r.kind === 'ARMOUR') && r.state !== 'WITHDRAW' && r.state !== 'BROKEN');
+    const dp: RedDecisionPoint = {
+      key,
+      kind: 'CATK',
+      sit: `Own C attk (${ECH[b.echelon] ?? 'force'}) closing on our ${threatened.length} sub-unit(s) at ${shortWhere(e, threatened[0].pos)} (${pctOf(threatened)}%), ${Math.round(dist(intel.pos, threatened[0].pos) / 10) * 10} m away. ${reserves.length} res/tk elm(s) aval. Arty amn ${e.ammo.EN_ARTY > 0 ? 'aval' : 'nil'}.`,
+      groups: [
+        {
+          name: 'act',
+          def: 'HOLD_FIGHT',
+          options: [
+            { id: 'HOLD_FIGHT', text: 'hold and fight from the captured posn' },
+            { id: 'REINFORCE', text: 'rush res/tks onto the obj' },
+            { id: 'ARTY_DF', text: 'arty DF on the C attk 10 min' },
+            { id: 'WITHDRAW', text: 'give up the obj, withdraw to FUP' },
+          ],
+        },
+      ],
+      focus: intel.pos,
+    };
+    const ch = aiDecide(e, dp);
+    if (ch === 'WAIT') return;
+    e.flags.catkSeen = [...seen, key];
+    const act = ch.picks.act || 'HOLD_FIGHT';
+    if (act === 'REINFORCE') {
+      reserves.forEach((r, i) => {
+        setPath(e, r, spread(threatened[0].pos, i, 90), { cover: 0.5 });
+        r.task = 'Reinforcing the obj';
+      });
+    } else if (act === 'ARTY_DF') {
+      redArty(e, intel.pos, 10, 'en DF on own C attk');
+    } else if (act === 'WITHDRAW') {
+      for (const r of threatened) {
+        setPath(e, r, e.redPlan.fup, { cover: 0.8, state: 'WITHDRAW' });
+        r.task = 'Withdrawing before C attk';
+      }
+      if (!red.some((r) => alive(r) && r.state === 'CONSOLIDATE')) {
+        e.redPhase = 'FAILED';
+        e.marks.attackFailed = e.t;
+      }
+    }
+    return;
+  }
+}

@@ -12,6 +12,9 @@ import { Modal, toast } from '../kit';
 import { MapView } from '../mapView';
 import { aorBox, simScene } from '../scene';
 import type { StepProps } from './flow';
+import { useBattleAi } from '../../ai/ui/hooks';
+import { AiWarHud } from '../../ai/ui/AiWarHud';
+import { RadioNet } from '../../ai/ui/RadioNet';
 
 const SPEEDS = [1, 3, 10, 30, 60];
 
@@ -27,6 +30,7 @@ export function Wargame(p: StepProps) {
       difficulty: ex.settings.difficulty,
     });
   }, [attempt.id, done]);
+  const ai = useBattleAi(engine);
   const [, tick] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(10);
@@ -45,7 +49,7 @@ export function Wargame(p: StepProps) {
       acc.current += speed / 10;
       let n = Math.floor(acc.current);
       acc.current -= n;
-      while (n-- > 0 && !engine.pending && !engine.over) engine.step();
+      while (n-- > 0 && !engine.pending && !engine.over && !ai?.holding()) engine.step();
       if (engine.pending) setPlaying(false);
       tick((x) => x + 1);
     }, 100);
@@ -73,6 +77,7 @@ export function Wargame(p: StepProps) {
     saving.current = true;
     (async () => {
       const rec = wargameRecord(engine);
+      if (ai) rec.ai = ai.record();
       const pa = attempt.planAssessment ?? assessPlan(s, attempt.plan);
       const f = finalScore(pa.pct, rec.assessment.pct, ex.settings.planWeight, attempt.instructorAdj ?? 0);
       p.update((a) => {
@@ -116,7 +121,7 @@ export function Wargame(p: StepProps) {
   };
   const skipToEvent = () => {
     const n0 = e.log.length;
-    for (let i = 0; i < 600 && !e.pending && !e.over; i++) {
+    for (let i = 0; i < 600 && !e.pending && !e.over && !ai?.holding(); i++) {
       e.step();
       if (e.log.slice(n0).some((l) => l.level === 'warn' || l.level === 'crit')) break;
     }
@@ -180,6 +185,7 @@ export function Wargame(p: StepProps) {
           <div class="hudchip" title="Fog of war">
             Fog: {ex.settings.fog.toLowerCase()}
           </div>
+          <AiWarHud ai={ai} />
           <div class="hudchip">
             Cas own {Math.round(e.stats.blueCas)} · en {ex.settings.fog === 'OFF' ? Math.round(e.stats.redCas) : 'unknown'}
           </div>
@@ -200,6 +206,7 @@ export function Wargame(p: StepProps) {
       </MapView>
       <div class="side right" style={{ width: 340 }}>
         <FireSupport e={e} sel={sel} selContact={selContact} order={order} setMode={setMode} />
+        <RadioNet e={e} ai={ai} selContactId={selContact?.unitId} onChange={() => tick((x) => x + 1)} />
         <div class="sect" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           <h4>Radio log</h4>
           <div class="log" style={{ overflow: 'auto', flex: 1 }}>

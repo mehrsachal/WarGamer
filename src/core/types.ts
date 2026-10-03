@@ -483,6 +483,9 @@ export interface AiRecord {
   events: { time: number; who: 'EN_CDR' | 'RADIO' | 'UMPIRE'; text: string }[];
   /** AI mentor debrief text, if requested. */
   mentor?: string;
+  /** Enemy-commander choices with the tick each was applied (-1 = never applied), so a re-run
+   *  with the same seed and choices reproduces the battle (see src/sim/aiHooks.ts replayAi). */
+  choices?: { key: string; t: number; picks: Record<string, string>; intent: string; src: 'AI' | 'RULE' | 'REPLAY' }[];
 }
 
 export interface ReplayFrame {

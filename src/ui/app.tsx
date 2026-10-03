@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
+import { initAiJudge } from '../ai/judge';
+import { AiPill } from '../ai/ui/AiSettings';
 import type { AppSettings } from '../core/types';
 import { db, dbKind, initDb } from '../store/db';
 import { ensureSeed } from './data';
@@ -16,6 +18,7 @@ export function App() {
   const [settings, setSettings] = useState<AppSettings | undefined>();
   const [, force] = useState(0);
   useEffect(() => {
+    initAiJudge();
     initDb()
       .then(ensureSeed)
       .then(() => db.get('settings', 'settings'))
@@ -74,6 +77,7 @@ export function App() {
           <span class="who" title={`Storage: ${dbKind()}`}>
             {session.role === 'INSTRUCTOR' ? '🎖 Instructor' : '🪖 Student'} · {session.name}
           </span>
+          <AiPill />
           <span class="badge b-grey" title="Where data is stored">
             {dbKind() === 'LAN' ? 'LAN shared' : dbKind() === 'IDB' ? 'Offline · this PC' : 'Temporary (memory)'}
           </span>

@@ -7,6 +7,7 @@ import { Badge, HBars, LineChart, ScoreRing, SERIES } from '../kit';
 import { MapView } from '../mapView';
 import { aorBox, replayScene, type UnitMeta } from '../scene';
 import type { StepProps } from './flow';
+import { AiDebrief } from '../../ai/ui/AiMentor';
 
 export function Debrief(p: StepProps) {
   return <DebriefView s={p.s} attempt={p.attempt} ex={p.ex} />;
@@ -67,6 +68,7 @@ export function DebriefView(p: { s: Scenario; attempt: Attempt; ex: Exercise; ex
         )}
       </div>
       {p.extra}
+      <AiDebrief s={s} attempt={attempt} />
       <Replay s={s} attempt={attempt} />
       <div class="grid2" style={{ marginTop: 14 }}>
         <div class="card">

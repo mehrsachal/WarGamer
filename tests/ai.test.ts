@@ -253,6 +253,11 @@ test('request params follow the per-model rules', () => {
   const haiku = buildParams('claude-haiku-4-5', { ...spec, schema: undefined }) as unknown as Record<string, unknown>;
   assert.equal(haiku.max_tokens, 300);
   for (const k of ['thinking', 'fallbacks', 'betas', 'output_config', 'temperature']) assert.ok(!(k in haiku), `haiku: no ${k}`);
+  // structured output on Haiku: format only (no effort, no fallbacks, no beta header — structured outputs are GA)
+  const haikuJson = buildParams('claude-haiku-4-5', spec) as unknown as Record<string, unknown>;
+  assert.deepEqual(Object.keys(haikuJson.output_config as object), ['format']);
+  for (const k of ['thinking', 'fallbacks', 'betas']) assert.ok(!(k in haikuJson), `haiku json: no ${k}`);
+  assert.deepEqual(opus.betas, ['server-side-fallback-2026-07-01']);
 });
 
 test('client: good answers parse; refusal, max_tokens, bad JSON, errors and timeouts fall back', async () => {

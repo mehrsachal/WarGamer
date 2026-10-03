@@ -48,7 +48,6 @@ export interface AiClientOptions {
 }
 
 const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
-const STRUCTURED_BETA = 'structured-outputs-2025-12-15';
 
 export function isBigModel(m: string): boolean {
   return m === 'claude-opus-5-5' || m === 'claude-sonnet-5-5';
@@ -74,8 +73,8 @@ export function buildParams(model: AiModel, c: Pick<AiCall<unknown>, 'system' | 
   }
   if (c.schema) {
     const f = betaJSONSchemaOutputFormat(c.schema as never);
+    // structured outputs are GA: output_config.format needs no beta header
     output.format = { type: 'json_schema', schema: f.schema };
-    betas.push(STRUCTURED_BETA);
   }
   if (Object.keys(output).length) p.output_config = output;
   if (betas.length) p.betas = betas;

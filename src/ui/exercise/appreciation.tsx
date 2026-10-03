@@ -26,27 +26,57 @@ function moveIn<T>(arr: T[], i: number, d: number): T[] {
   return a;
 }
 
-function OrderList(p: { items: { id: string; label: string }[]; order: string[]; onChange: (o: string[]) => void; readOnly: boolean; pick?: boolean; max?: number }) {
+/** Dense ranks from "tied with the item above" flags. */
+function ranksFrom(tied: boolean[]): number[] {
+  const r: number[] = [];
+  tied.forEach((t, i) => r.push(i === 0 ? 1 : t ? r[i - 1] : r[i - 1] + 1));
+  return r;
+}
+
+function OrderList(p: { items: { id: string; label: string }[]; order: string[]; onChange: (o: string[]) => void; readOnly: boolean; pick?: boolean; max?: number; ranks?: number[]; onRanks?: (r: number[] | undefined) => void }) {
   const chosen = p.order.filter((id) => p.items.some((i) => i.id === id));
   const rest = p.items.filter((i) => !chosen.includes(i.id));
   const label = (id: string) => p.items.find((i) => i.id === id)?.label ?? id;
+  const ranks = p.ranks && p.ranks.length === chosen.length ? p.ranks : chosen.map((_, i) => i + 1);
+  const tied = ranks.map((r, i) => i > 0 && r === ranks[i - 1]);
+  const setTie = (i: number, on: boolean) => {
+    const t = [...tied];
+    t[i] = on;
+    p.onRanks?.(t.some(Boolean) ? ranksFrom(t) : undefined);
+  };
+  // ties are positional: re-derive ranks for the new length when the list changes
+  const change = (o: string[]) => {
+    p.onChange(o);
+    if (p.onRanks && tied.some(Boolean)) {
+      const t = o.map((_, i) => !!tied[i]);
+      p.onRanks(t.some(Boolean) ? ranksFrom(t) : undefined);
+    }
+  };
   return (
     <div class="col" style={{ gap: 8 }}>
       <div class="pill-list">
         {chosen.map((id, i) => (
-          <div class="it" key={id}>
-            <span class="num">{i + 1}</span>
+          <div class={`it ${tied[i] ? 'tied' : ''}`} key={id}>
+            <span class="num" title={tied[i] ? 'Equal priority with the item above' : undefined}>
+              {tied[i] ? '=' : ''}
+              {ranks[i]}
+            </span>
             <span class="grow">{label(id)}</span>
             {!p.readOnly && (
               <>
-                <button class="btn small ghost" title="Up" onClick={() => p.onChange(moveIn(chosen, i, -1))}>
+                {p.onRanks && i > 0 && (
+                  <button class={`btn small ghost tie ${tied[i] ? 'active' : ''}`} title={tied[i] ? 'Separate from the item above' : 'Equal priority with the item above (tie)'} onClick={() => setTie(i, !tied[i])}>
+                    =
+                  </button>
+                )}
+                <button class="btn small ghost" title="Up" onClick={() => change(moveIn(chosen, i, -1))}>
                   ▲
                 </button>
-                <button class="btn small ghost" title="Down" onClick={() => p.onChange(moveIn(chosen, i, 1))}>
+                <button class="btn small ghost" title="Down" onClick={() => change(moveIn(chosen, i, 1))}>
                   ▼
                 </button>
                 {p.pick && (
-                  <button class="btn small ghost" title="Remove" onClick={() => p.onChange(chosen.filter((x) => x !== id))}>
+                  <button class="btn small ghost" title="Remove" onClick={() => change(chosen.filter((x) => x !== id))}>
                     ✕
                   </button>
                 )}
@@ -59,13 +89,31 @@ function OrderList(p: { items: { id: string; label: string }[]; order: string[];
       {p.pick && !p.readOnly && rest.length > 0 && (!p.max || chosen.length < p.max) && (
         <div class="row wrap" style={{ gap: 6 }}>
           {rest.map((r) => (
-            <button key={r.id} class="btn small" onClick={() => p.onChange([...chosen, r.id])}>
+            <button key={r.id} class="btn small" onClick={() => change([...chosen, r.id])}>
               + {r.label}
             </button>
           ))}
         </div>
       )}
     </div>
+  );
+}
+
+/** Optional justification of a choice (judged on its key points). */
+function Why(p: { k: string; a: Aprc; readOnly: boolean; set: (fn: (x: Aprc) => void) => void; ph?: string }) {
+  const v = p.a.why?.[p.k] ?? '';
+  const [open, setOpen] = useState(!!v);
+  if (!open)
+    return p.readOnly ? null : (
+      <button class="btn small ghost why-btn" onClick={() => setOpen(true)}>
+        ＋ Why? (optional justification)
+      </button>
+    );
+  return (
+    <label class="field why">
+      Why — your reasoning (optional, judged on its key points)
+      <textarea rows={2} disabled={p.readOnly} placeholder={p.ph ?? 'Because …'} value={v} onInput={(e) => p.set((x) => (x.why = { ...(x.why ?? {}), [p.k]: e.currentTarget.value }))} />
+    </label>
   );
 }
 
@@ -102,14 +150,18 @@ export function Appreciation(p: StepProps) {
       <div class="side" style={{ width: 'min(640px, 50vw)' }}>
         <div class="sect">
           <h2>Appreciation of the situation</h2>
-          <div class="muted small">Record your deductions. The ordered selections are marked objectively against the DS; the written parts are for your instructor.</div>
+          <div class="muted small">
+            Everything here is optional and can be done in any order — unanswered items are simply not credited. Orderings are compared with the DS by rank agreement (ties allowed with “=”), so a near-miss earns most of the marks;
+            your justifications and written deductions are judged on their key points.
+          </div>
         </div>
         <div class="sect">
           <h3>Pri of apchs</h3>
           <div class="muted small" style={{ marginBottom: 8 }}>
             Order all apchs (most likely first). Hover/click on a name to see it on the map.
           </div>
-          <OrderList items={apchItems} order={apOrder} pick readOnly={readOnly} onChange={(o) => set((x) => (x.approachOrder = o))} />
+          <OrderList items={apchItems} order={apOrder} pick readOnly={readOnly} onChange={(o) => set((x) => (x.approachOrder = o))} ranks={a.rankTies?.approachOrder} onRanks={(r) => set((x) => (x.rankTies = { ...(x.rankTies ?? {}), approachOrder: r }))} />
+          <Why k="approachOrder" a={a} readOnly={readOnly} set={set} ph="e.g. The Western apch has good tk going, cover to the FUP and the shortest distance to the vital gr…" />
           <div class="row wrap" style={{ marginTop: 8 }}>
             {apchItems.map((it) => (
               <button class={`btn small ${hi === it.id ? 'active' : ''}`} onMouseEnter={() => setHi(it.id)} onClick={() => setHi(it.id)}>
@@ -137,17 +189,19 @@ export function Appreciation(p: StepProps) {
               </select>
             </label>
           </div>
+          <Why k="enMostLikelyApproach" a={a} readOnly={readOnly} set={set} ph="Why the en will use this apch, and why the bias…" />
         </div>
         <div class="sect">
           <h3>Pri of ITGs</h3>
           <div class="muted small" style={{ marginBottom: 8 }}>
             Select and order the important tactical gr (at least the top 3).
           </div>
-          <OrderList items={itgItems} order={a.itgOrder} pick max={8} readOnly={readOnly} onChange={(o) => set((x) => (x.itgOrder = o))} />
+          <OrderList items={itgItems} order={a.itgOrder} pick max={8} readOnly={readOnly} onChange={(o) => set((x) => (x.itgOrder = o))} ranks={a.rankTies?.itgOrder} onRanks={(r) => set((x) => (x.rankTies = { ...(x.rankTies ?? {}), itgOrder: r }))} />
+          <Why k="itgOrder" a={a} readOnly={readOnly} set={set} />
         </div>
         <div class="sect">
           <h3>Lines of def</h3>
-          <OrderList items={lineItems} order={a.lineOrder} pick readOnly={readOnly} onChange={(o) => set((x) => (x.lineOrder = o))} />
+          <OrderList items={lineItems} order={a.lineOrder} pick readOnly={readOnly} onChange={(o) => set((x) => (x.lineOrder = o))} ranks={a.rankTies?.lineOrder} onRanks={(r) => set((x) => (x.rankTies = { ...(x.rankTies ?? {}), lineOrder: r }))} />
           <div class="grid2" style={{ marginTop: 10 }}>
             <label class="field">
               FDLs on
@@ -168,10 +222,11 @@ export function Appreciation(p: StepProps) {
               </select>
             </label>
           </div>
+          <Why k="fdlLine" a={a} readOnly={readOnly} set={set} ph="e.g. Line Y holds the vital gr, dominates all three apchs and leaves room for the screens…" />
         </div>
         <div class="sect">
           <h3>Pri of work</h3>
-          <OrderList items={powItems} order={powOrder} readOnly={readOnly} onChange={(o) => set((x) => (x.priorityOfWork = o))} />
+          <OrderList items={powItems} order={powOrder} readOnly={readOnly} onChange={(o) => set((x) => (x.priorityOfWork = o))} ranks={a.priorityOfWork.length ? a.rankTies?.priorityOfWork : undefined} onRanks={(r) => set((x) => ((x.priorityOfWork = x.priorityOfWork.length ? x.priorityOfWork : powOrder), (x.rankTies = { ...(x.rankTies ?? {}), priorityOfWork: r })))} />
           {!a.priorityOfWork.length && !readOnly && (
             <button class="btn small" style={{ marginTop: 8 }} onClick={() => set((x) => (x.priorityOfWork = powOrder))}>
               Confirm this order

@@ -1,28 +1,34 @@
-import { useMemo } from 'preact/hooks';
-import { assessPlan } from '../../assess/plan';
+import { useMemo, useState } from 'preact/hooks';
+import { applyOverrides, assessPlan, assessPlanAsync } from '../../assess/plan';
 import { workload } from '../../plan/plan';
-import { CONTINGENCIES } from '../../plan/contingency';
+import { CONTINGENCIES, choicePlanned } from '../../plan/contingency';
 import { db } from '../../store/db';
 import { HBars, ScoreRing, toast } from '../kit';
+import { BandSummary, Rubric } from './debrief';
 import type { StepProps } from './flow';
 
 export function SubmitStep(p: StepProps) {
   const { s, attempt, ex } = p;
   const plan = attempt.plan;
   const wl = workload(s, plan);
+  // nothing is mandatory: unanswered items are simply not credited
   const missing: string[] = [];
   if (!plan.appreciation.approachOrder.length) missing.push('Pri of apchs (Appreciation)');
   if (!plan.appreciation.fdlLine) missing.push('Line of FDLs selection (Appreciation)');
   if (!plan.units.some((u) => u.role === 'FDL')) missing.push('Fwd localities');
   if (!plan.graphics.some((g) => g.kind === 'DF' && g.props.sos)) missing.push('DF (SOS)');
-  const cont = CONTINGENCIES.filter((d) => d.levels.includes(s.level) && !plan.contingency[d.key]?.option);
-  if (cont.length) missing.push(`${cont.length} contingency decision(s)`);
+  const cont = CONTINGENCIES.filter((d) => d.levels.includes(s.level) && !choicePlanned(plan.contingency[d.key]));
+  if (cont.length) missing.push(`${cont.length} contingency response(s)`);
   const reveal = ex.settings.revealPlanScore === 'IMMEDIATE' || attempt.status === 'COMPLETE';
   const pa = attempt.planAssessment;
-  const preview = useMemo(() => (attempt.status === 'PLANNING' && p.session.role === 'INSTRUCTOR' ? assessPlan(s, plan) : null), [attempt.status, plan.updatedAt]);
+  const [busy, setBusy] = useState(false);
+  const preview = useMemo(() => (attempt.status === 'PLANNING' && p.session.role === 'INSTRUCTOR' ? assessPlan(s, plan, { marking: ex.settings.marking }) : null), [attempt.status, plan.updatedAt]);
   const submit = async () => {
-    if (missing.length && !confirm(`Still missing:\n• ${missing.join('\n• ')}\n\nSubmit anyway?`)) return;
-    const res = assessPlan(s, plan);
+    if (!plan.units.length && !confirm('No forces have been placed on the map. Submit anyway?')) return;
+    setBusy(true);
+    // free text is marked by the registered judge (the AI judge when configured)
+    const res = applyOverrides(await assessPlanAsync(s, plan, { marking: ex.settings.marking }), attempt.itemOverrides, 'plan');
+    setBusy(false);
     p.update((a) => {
       a.status = 'SUBMITTED';
       a.submittedAt = Date.now();
@@ -62,8 +68,8 @@ export function SubmitStep(p: StepProps) {
         </div>
       </div>
       {missing.length > 0 && attempt.status === 'PLANNING' && (
-        <div class="card" style={{ marginTop: 14, borderColor: '#7a5a10' }}>
-          <h3>Still missing</h3>
+        <div class="card" style={{ marginTop: 14, borderColor: '#5c4a1c' }}>
+          <h3>Not done yet (optional — not credited until done)</h3>
           <ul>
             {missing.map((m) => (
               <li>{m}</li>
@@ -81,8 +87,8 @@ export function SubmitStep(p: StepProps) {
             <button class="btn" onClick={() => p.go('cont')}>
               ← Contingencies
             </button>
-            <button class="btn primary right" onClick={submit} disabled={p.readOnly}>
-              Submit plan &amp; open wargame
+            <button class="btn primary right" onClick={submit} disabled={p.readOnly || busy}>
+              {busy ? 'Marking…' : 'Submit plan & open wargame'}
             </button>
           </div>
         </div>
@@ -107,8 +113,10 @@ export function SubmitStep(p: StepProps) {
               <HBars items={shown.groups.map((g) => ({ label: g.group, value: g.pct }))} max={100} unit="%" />
             </div>
           </div>
+          <BandSummary a={shown} />
         </div>
       )}
+      {shown && (reveal || preview) && <Rubric title={preview && !pa ? 'Live marking (instructor only)' : 'Plan — detailed marking'} a={shown} />}
       {pa && !reveal && <div class="muted" style={{ marginTop: 12 }}>Your plan score will be shown in the debrief.</div>}
     </div>
   );

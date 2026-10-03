@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { assessPlan } from '../../assess/plan';
+import { rejudgeDecisions } from '../../assess/decisions';
+import { applyOverrides, assessPlan } from '../../assess/plan';
 import { finalScore, wargameRecord } from '../../assess/wargame';
 import type { Vec } from '../../core/geom';
 import { hashString } from '../../core/rng';
@@ -11,6 +12,9 @@ import { db } from '../../store/db';
 import { Modal, toast } from '../kit';
 import { MapView } from '../mapView';
 import { aorBox, simScene } from '../scene';
+import { MAP_WINDOW_MIN } from '../../sim/injects';
+import { actionText, contingencyDef, quickPickFor } from '../../plan/contingency';
+import { actionsFor, Composer, type ComposerAction } from './composer';
 import type { StepProps } from './flow';
 
 const SPEEDS = [1, 3, 10, 30, 60];
@@ -72,8 +76,10 @@ export function Wargame(p: StepProps) {
     if (!engine || !engine.over || saving.current) return;
     saving.current = true;
     (async () => {
+      await rejudgeDecisions(engine.decisions);
       const rec = wargameRecord(engine);
-      const pa = attempt.planAssessment ?? assessPlan(s, attempt.plan);
+      rec.assessment = applyOverrides(rec.assessment, attempt.itemOverrides, 'war');
+      const pa = applyOverrides(attempt.planAssessment ?? assessPlan(s, attempt.plan, { marking: ex.settings.marking }), attempt.itemOverrides, 'plan');
       const f = finalScore(pa.pct, rec.assessment.pct, ex.settings.planWeight, attempt.instructorAdj ?? 0);
       p.update((a) => {
         a.status = 'COMPLETE';
@@ -212,7 +218,8 @@ export function Wargame(p: StepProps) {
           </div>
         </div>
       </div>
-      {e.pending && <DecisionModal d={e.pending} e={e} onDecide={(inp) => (e.decide(inp), tick((x) => x + 1), setPlaying(true))} />}
+      {e.pending && !e.pending.onMap && <DecisionModal d={e.pending} e={e} scene={scene} onDecide={(inp) => (e.decide(inp), tick((x) => x + 1), setPlaying(true))} onMap={() => (e.actOnMap(), setPlaying(false), tick((x) => x + 1))} />}
+      {e.pending?.onMap && <MapDecisionBar d={e.pending} e={e} onBack={() => ((e.pending!.onMap = undefined), tick((x) => x + 1))} onResume={(t) => (e.resumeFromMap(t), tick((x) => x + 1), setPlaying(true))} />}
     </div>
   );
 }
@@ -321,65 +328,131 @@ function FireSupport(p: { e: Engine; sel?: string; selContact?: { id: string; un
   );
 }
 
-function DecisionModal(p: { d: PendingDecision; e: Engine; onDecide: (i: DecisionInput) => void }) {
-  const { d } = p;
-  const [opt, setOpt] = useState(d.preplanned && !d.multi ? d.preplanned : '');
-  const [multi, setMulti] = useState<string[]>(d.multi ? (d.preplanned ?? '').split(',').filter(Boolean) : []);
+// ---------------------------------------------------------------------------- decisions
+
+/**
+ * Decision card: what happened (time, report, map focus) and a response composer pre-loaded
+ * with the contingency plan. The student may execute a composed response, act on the map
+ * instead (battle stays paused until "Resume battle"), or take no action.
+ */
+function DecisionModal(p: { d: PendingDecision; e: Engine; scene: MapScene; onDecide: (i: DecisionInput) => void; onMap: () => void }) {
+  const { d, e } = p;
+  const offered: ComposerAction[] = d.actions ?? actionsFor(contingencyDef(d.key).actions, (id) => actionText(id, d.key));
+  const [sel, setSel] = useState<string[]>(d.preplannedActions ?? []);
+  const [text, setText] = useState(d.preplannedText ?? '');
   const [unit, setUnit] = useState(d.preplannedUnit ?? '');
   const [delay, setDelay] = useState(d.preplannedDelay ?? 15);
-  const cur = d.options.find((o) => o.id === opt);
-  const ok = d.multi ? multi.length > 0 : !!opt;
+  const [dfId, setDfId] = useState(d.preplannedDf ?? '');
+  const k = e.s.level === 'BDE' ? 4 : e.s.level === 'BN' ? 2.2 : e.s.level === 'PL' ? 0.6 : 1;
+  const R = 1300 * k;
+  const f = d.focus;
+  const box = f ? { minX: f.x - R, minY: f.y - R * 0.75, maxX: f.x + R, maxY: f.y + R * 0.75 } : null;
+  const planned = d.preplannedActions?.length || d.preplannedText?.trim();
+  const changed = !!planned && (sel.length !== (d.preplannedActions ?? []).length || sel.some((a) => !(d.preplannedActions ?? []).includes(a)));
+  const ok = sel.length > 0 || text.trim().length > 0;
+  const execute = () => p.onDecide({ option: quickPickFor(d.key, sel) ?? sel[0] ?? '', actions: sel, text: text.trim() || undefined, unitId: unit || undefined, delayMin: delay, dfId: dfId || undefined, source: 'MODAL' });
   return (
     <Modal
-      title={<span>⚠ {d.title}</span>}
+      title={
+        <span class="row" style={{ gap: 10 }}>
+          <span class="dec-flag">DECISION</span> {d.title}
+        </span>
+      }
       wide
       footer={
         <>
-          <span class="muted small" style={{ marginRight: 'auto' }}>
-            Your decision is recorded and assessed. Time is frozen while you decide.
+          <span class="muted small" style={{ marginRight: 'auto', maxWidth: 420 }}>
+            Time is frozen. Your response is marked against the situation — several responses can be sound. Orders you give on the map in the next {MAP_WINDOW_MIN} min also count.
           </span>
-          <button class="btn primary" disabled={!ok} onClick={() => p.onDecide(d.multi ? { option: multi.join(','), options: multi } : { option: opt, unitId: unit || undefined, delayMin: delay })}>
-            Confirm decision
+          <button class="btn" title="Record that you take no action now" onClick={() => p.onDecide({ option: '', actions: [], source: 'MODAL' })}>
+            No action
+          </button>
+          <button class="btn olive" title="Close this card and give your orders on the map; the battle stays paused until you resume" onClick={p.onMap}>
+            ⌖ Act on map
+          </button>
+          <button class="btn primary" disabled={!ok} onClick={execute}>
+            ▶ Execute{sel.length ? ` (${sel.length})` : ''}
           </button>
         </>
       }
     >
-      <div class="decision">
-        <div class="situ">{d.prompt}</div>
-        {d.options.map((o) =>
-          d.multi ? (
-            <label class={`opt ${multi.includes(o.id) ? 'on' : ''}`} key={o.id}>
-              <input type="checkbox" checked={multi.includes(o.id)} onChange={(ev) => setMulti(ev.currentTarget.checked ? [...multi, o.id] : multi.filter((x) => x !== o.id))} style={{ marginRight: 8 }} />
-              {o.text}
-            </label>
-          ) : (
-            <button class={`opt ${opt === o.id ? 'on' : ''}`} key={o.id} onClick={() => setOpt(o.id)}>
-              {d.preplanned === o.id && <span class="pp badge b-blue">Your contingency plan</span>}
-              {o.text}
-            </button>
-          ),
-        )}
-        {cur?.needsUnit && d.unitChoices && (
-          <label class="field" style={{ marginTop: 6 }}>
-            Force
-            <select value={unit} onChange={(ev) => setUnit(ev.currentTarget.value)}>
-              <option value="">— auto (nearest suitable) —</option>
-              {d.unitChoices.map((u) => (
-                <option value={u.id}>{u.label}</option>
-              ))}
-            </select>
-          </label>
-        )}
-        {cur?.needsDelay && (
-          <label class="field" style={{ marginTop: 6 }}>
-            Launch in (min) — battle procedure, SL, route, fire sp
-            <input type="number" min={0} max={120} value={delay} onInput={(ev) => setDelay(Number(ev.currentTarget.value))} />
-          </label>
-        )}
-        {d.focus && <div class="dim small" style={{ marginTop: 8 }}>Location: {p.e.where(d.focus)} · {p.e.terrain.gridRef(d.focus)}</div>}
+      <div class="dec-grid">
+        <div class="dec-situ">
+          <div class="situ-card">
+            <div class="row" style={{ gap: 8 }}>
+              <span class="hudchip">{fmtTime(d.time)}</span>
+              {d.focus && <span class="mono small dim">{e.terrain.gridRef(d.focus)}</span>}
+            </div>
+            <div class="situ-text">{d.situation ?? d.prompt}</div>
+            {d.focus && <div class="dim small">{e.where(d.focus)}</div>}
+          </div>
+          {box && (
+            <div class="dec-map">
+              <MapView scenario={e.s} scene={p.scene} fit={box} cover layers={{ decor: false }} />
+              <div class="focus-ring" />
+            </div>
+          )}
+          <div class={`dec-plan ${planned ? '' : 'none'}`}>
+            <h4>Your contingency plan</h4>
+            {planned ? (
+              <>
+                <div class="small">{(d.preplannedActions ?? []).map((a) => actionText(a, d.key).split(' — ')[0]).join(' · ') || '—'}</div>
+                {d.preplannedText?.trim() && <div class="small dim">“{d.preplannedText.trim()}”</div>}
+                {changed && <div class="small" style={{ color: '#ffd36a', marginTop: 4 }}>You have changed it.</div>}
+              </>
+            ) : (
+              <div class="small dim">{d.core === false ? 'Not foreseen in your plan — decide now.' : 'Not pre-planned.'}</div>
+            )}
+          </div>
+        </div>
+        <div class="dec-resp">
+          <Composer
+            actions={offered}
+            selected={sel}
+            onChange={setSel}
+            planned={d.preplannedActions}
+            columns={2}
+            text={text}
+            onText={setText}
+            textLabel="Your orders in your own words (optional)"
+            textPlaceholder="e.g. Hello 2 Pl, this is 0 — DF SOS now; readjust to your altn posn facing the threat; hold fire till the KA. Out."
+            unitChoices={d.unitChoices}
+            unitId={unit}
+            onUnit={setUnit}
+            unitLabel={d.key === 'POST_LOST' ? 'C attk force' : 'Force'}
+            delay={delay}
+            onDelay={d.key === 'POST_LOST' ? setDelay : undefined}
+            dfChoices={e.dfs.map((x) => ({ id: x.id, label: `${x.label}${x.sos ? ' (SOS)' : ''} · ${e.terrain.squareRef(x.pos)}` }))}
+            dfId={dfId}
+            onDf={setDfId}
+          />
+        </div>
       </div>
     </Modal>
   );
 }
 
-
+/** Shown while the student acts on the map for a pending decision (battle paused). */
+function MapDecisionBar(p: { d: PendingDecision; e: Engine; onResume: (text: string) => void; onBack: () => void }) {
+  const [text, setText] = useState('');
+  const n = p.e.orders.filter((o) => o.time >= (p.d.onMap?.since ?? p.e.t)).length;
+  return (
+    <div class="mapdec">
+      <div class="mapdec-h">
+        <span class="dec-flag">DECISION</span>
+        <b>{p.d.title}</b>
+        <span class="dim small">— battle paused. Give your orders with the panels and the map (DF, fire on contacts, altn posns, withdraw, C attk, C pen, QC…).</span>
+      </div>
+      <div class="row" style={{ gap: 8, marginTop: 8 }}>
+        <input type="text" class="grow" placeholder="Anything else, in your own words (optional)" value={text} onInput={(ev) => setText(ev.currentTarget.value)} />
+        <span class="badge b-blue">{n} order{n === 1 ? '' : 's'} given</span>
+        <button class="btn small" onClick={p.onBack}>
+          ↩ Decision card
+        </button>
+        <button class="btn primary" onClick={() => p.onResume(text)}>
+          ▶ Resume battle
+        </button>
+      </div>
+    </div>
+  );
+}

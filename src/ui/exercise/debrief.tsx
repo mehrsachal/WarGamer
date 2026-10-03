@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { fmtTime } from '../../core/time';
-import type { AssessmentResult, Attempt, Exercise, Scenario } from '../../core/types';
+import type { AssessmentResult, Attempt, Exercise, Scenario, ScoreItem, WargameRecord } from '../../core/types';
+import { BAND_LABEL, bandOf, type Band } from '../../assess/plan';
+import { ACTIONS, actionText, choiceActions } from '../../plan/contingency';
 import { gradeFor } from '../../core/doctrine';
 import type { MapScene } from '../../render/mapRenderer';
 import { Badge, HBars, LineChart, ScoreRing, SERIES } from '../kit';
@@ -12,7 +14,7 @@ export function Debrief(p: StepProps) {
   return <DebriefView s={p.s} attempt={p.attempt} ex={p.ex} />;
 }
 
-export function DebriefView(p: { s: Scenario; attempt: Attempt; ex: Exercise; extra?: preact.ComponentChildren }) {
+export function DebriefView(p: { s: Scenario; attempt: Attempt; ex: Exercise; extra?: preact.ComponentChildren; overrides?: Record<string, { score: number; note?: string }>; onOverride?: (id: string, v: { score: number; note?: string } | null) => void }) {
   const { s, attempt } = p;
   const w = attempt.wargame;
   const pa = attempt.planAssessment;
@@ -29,6 +31,7 @@ export function DebriefView(p: { s: Scenario; attempt: Attempt; ex: Exercise; ex
             <div class="row wrap">
               <Badge kind={resKind}>{sm.result === 'HELD' ? 'DEF HELD' : sm.result === 'PARTIAL' ? 'LIMITED PENETRATION' : 'DEF PENETRATED'}</Badge>
               <span class="muted">{g.text}</span>
+              <BandChip band={bandOf((attempt.finalPct ?? 0) / 100)} />
             </div>
             <h1 style={{ marginTop: 8 }}>{sm.resultText}</h1>
             <div class="grid4" style={{ marginTop: 10 }}>
@@ -80,54 +83,22 @@ export function DebriefView(p: { s: Scenario; attempt: Attempt; ex: Exercise; ex
       </div>
       <div class="card" style={{ marginTop: 14 }}>
         <h3>Decisions during the battle</h3>
-        {w.decisions.length ? (
-          <table class="tbl">
-            <thead>
-              <tr>
-                <th>Time</th>
-                <th>Inject</th>
-                <th>Your decision</th>
-                <th>Verdict</th>
-                <th>Why (doctrine)</th>
-              </tr>
-            </thead>
-            <tbody>
-              {w.decisions.map((d) => (
-                <tr>
-                  <td class="mono small">{fmtTime(d.time)}</td>
-                  <td>
-                    <b>{d.title}</b>
-                    {d.preplanned && d.preplanned !== d.option && !d.option.includes(',') && <div class="small" style={{ color: '#ffd36a' }}>changed from your contingency plan</div>}
-                  </td>
-                  <td class="small">{d.optionText}</td>
-                  <td>
-                    <b class={`verdict-${d.verdict}`}>{d.verdict}</b>
-                    <div class="dim small">{Math.round(d.score * 100)}%</div>
-                  </td>
-                  <td class="small">
-                    {d.rationale}
-                    <div class="dim">{d.ref}</div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        ) : (
-          <div class="muted">No injects arose — your surveillance did not detect the situations that trigger decisions, or the battle ended early.</div>
-        )}
+        <DecisionsTable w={w} />
       </div>
       <div class="grid2" style={{ marginTop: 14 }}>
         <div class="card">
           <h3>Plan assessment</h3>
           <HBars items={pa.groups.map((x) => ({ label: x.group, value: x.pct }))} max={100} unit="%" />
+          <BandSummary a={pa} />
         </div>
         <div class="card">
           <h3>Conduct of battle</h3>
           <HBars items={w.assessment.groups.map((x) => ({ label: x.group, value: x.pct }))} max={100} unit="%" />
+          <BandSummary a={w.assessment} />
         </div>
       </div>
-      <Rubric title="Plan — detailed marking" a={pa} />
-      <Rubric title="Conduct of battle — detailed marking" a={w.assessment} />
+      <Rubric title="Plan — detailed marking" a={pa} prefix="plan" overrides={p.overrides} onOverride={p.onOverride} />
+      <Rubric title="Conduct of battle — detailed marking" a={w.assessment} prefix="war" overrides={p.overrides} onOverride={p.onOverride} />
       <div class="grid2" style={{ marginTop: 14 }}>
         <div class="card">
           <h3>What the en did</h3>
@@ -153,58 +124,226 @@ export function DebriefView(p: { s: Scenario; attempt: Attempt; ex: Exercise; ex
   );
 }
 
-export function Rubric(p: { title: string; a: AssessmentResult }) {
+const BAND_KIND: Record<Band, 'green' | 'blue' | 'amber' | 'red'> = { EXCELLENT: 'green', GOOD: 'blue', ADEQUATE: 'amber', NEEDS_WORK: 'red' };
+
+function itemBand(i: ScoreItem): Band {
+  return i.band ?? bandOf(i.score);
+}
+
+export function BandChip(p: { band: Band; small?: boolean }) {
+  return <span class={`band band-${p.band} ${p.small ? 'sm' : ''}`}>{BAND_LABEL[p.band]}</span>;
+}
+
+/** Overall band, band counts and the top strengths / improvements of an assessment. */
+export function BandSummary(p: { a: AssessmentResult }) {
+  const items = p.a.items.filter((i) => i.verdict !== 'NA' && i.weight > 0);
+  const counts = (['EXCELLENT', 'GOOD', 'ADEQUATE', 'NEEDS_WORK'] as Band[]).map((b) => ({ b, n: items.filter((i) => itemBand(i) === b).length }));
+  const good = [...items].filter((i) => i.score >= 0.85).sort((a, b) => b.weight - a.weight).slice(0, 4);
+  const improve = [...items].filter((i) => i.score < 0.65).sort((a, b) => b.weight * (1 - b.score) - a.weight * (1 - a.score)).slice(0, 4);
+  return (
+    <div class="band-summary">
+      <div class="row wrap" style={{ gap: 8 }}>
+        <span class="dim small">Overall</span>
+        <BandChip band={bandOf(p.a.pct / 100)} />
+        <span class="sepv" />
+        {counts.map((c) => (
+          <span class="band-count" key={c.b}>
+            <BandChip band={c.b} small /> <b>{c.n}</b>
+          </span>
+        ))}
+      </div>
+      <div class="grid2" style={{ marginTop: 10 }}>
+        <div class="fb good">
+          <h4>What was good</h4>
+          {good.length ? (
+            <ul>
+              {good.map((i) => (
+                <li>
+                  <b>{i.title}.</b> {i.detail.split('. ')[0].replace(/\.$/, '')}.
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div class="dim small">Nothing excellent yet.</div>
+          )}
+        </div>
+        <div class="fb improve">
+          <h4>What to improve</h4>
+          {improve.length ? (
+            <ul>
+              {improve.map((i) => (
+                <li>
+                  <b>{i.title}:</b> {i.tip ?? i.detail} <span class="dim">({i.ref.split(';')[0]})</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div class="dim small">No significant weaknesses.</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function Rubric(p: { title: string; a: AssessmentResult; prefix?: 'plan' | 'war'; overrides?: Record<string, { score: number; note?: string }>; onOverride?: (id: string, v: { score: number; note?: string } | null) => void }) {
   const [open, setOpen] = useState<string | null>(null);
+  const edit = !!p.onOverride;
   return (
     <div class="card" style={{ marginTop: 14 }}>
-      <h3>{p.title}</h3>
-      <table class="tbl">
+      <div class="card-h">
+        <h3>{p.title}</h3>
+        {edit && <span class="right dim small">Instructor: override any item with the slider; the final score is recomputed when you save.</span>}
+      </div>
+      <table class="tbl rubric">
         <thead>
           <tr>
             <th>Group</th>
+            <th>Band</th>
             <th>Score</th>
             <th />
           </tr>
         </thead>
         <tbody>
-          {p.a.groups.map((g) => (
-            <>
-              <tr class="clickable" onClick={() => setOpen(open === g.group ? null : g.group)}>
-                <td>
-                  <b>{open === g.group ? '▾' : '▸'} {g.group}</b>
-                </td>
-                <td style={{ width: 220 }}>
-                  <div class={`bar ${g.pct >= 75 ? 'g' : g.pct >= 50 ? 'a' : 'r'}`}>
-                    <i style={{ width: `${g.pct}%` }} />
-                  </div>
-                </td>
-                <td style={{ width: 60 }}>{Math.round(g.pct)}%</td>
-              </tr>
-              {(open === g.group || typeof window === 'undefined') &&
-                p.a.items
-                  .filter((i) => i.group === g.group)
-                  .map((i) => (
-                    <tr>
-                      <td colSpan={3} style={{ paddingLeft: 24 }}>
-                        <div class="row" style={{ alignItems: 'flex-start' }}>
-                          <b class={`verdict-${i.verdict}`} style={{ width: 70, flex: 'none' }}>
-                            {i.verdict === 'PASS' ? '✔ PASS' : i.verdict === 'PARTIAL' ? '◐ PART' : i.verdict === 'NA' ? '— N/A' : '✖ FAIL'}
-                          </b>
-                          <div class="grow">
-                            <b>{i.title}</b> <span class="dim small">(wt {i.weight})</span>
-                            <div class="small">{i.detail}</div>
-                            <div class="dim small">{i.ref}</div>
-                          </div>
-                          <span class="small">{Math.round(i.score * 100)}%</span>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-            </>
-          ))}
+          {p.a.groups.map((g) => {
+            const gb = bandOf(g.pct / 100);
+            const isOpen = open === g.group || typeof window === 'undefined' || edit;
+            return (
+              <>
+                <tr class="clickable" onClick={() => setOpen(open === g.group ? null : g.group)}>
+                  <td>
+                    <b>
+                      {isOpen ? '▾' : '▸'} {g.group}
+                    </b>
+                  </td>
+                  <td style={{ width: 120 }}>
+                    <BandChip band={gb} small />
+                  </td>
+                  <td style={{ width: 240 }}>
+                    <div class={`bar band-bar band-${gb}`}>
+                      <i style={{ width: `${g.pct}%` }} />
+                    </div>
+                  </td>
+                  <td style={{ width: 60 }}>{Math.round(g.pct)}%</td>
+                </tr>
+                {isOpen &&
+                  p.a.items
+                    .filter((i) => i.group === g.group)
+                    .map((i) => {
+                      const b = itemBand(i);
+                      const key = `${p.prefix ?? 'plan'}:${i.id}`;
+                      const o = p.overrides?.[key];
+                      return (
+                        <tr class="rub-item">
+                          <td colSpan={4} style={{ paddingLeft: 24 }}>
+                            <div class="row" style={{ alignItems: 'flex-start' }}>
+                              <span style={{ width: 96, flex: 'none' }}>{i.verdict === 'NA' ? <span class="dim small">— n/a</span> : <BandChip band={b} small />}</span>
+                              <div class="grow">
+                                <b>{i.title}</b> <span class="dim small">(wt {Math.round(i.weight * 100) / 100})</span>
+                                {i.override && <span class="badge b-purple" style={{ marginLeft: 6 }} title={i.override.note}>DS override (auto {Math.round((i.auto ?? 0) * 100)}%)</span>}
+                                <div class="small">{i.detail}</div>
+                                {i.override?.note && <div class="small" style={{ color: '#e1a6f0' }}>DS: {i.override.note}</div>}
+                                {i.tip && i.score < 0.85 && <div class="small tip">↗ {i.tip}</div>}
+                                <div class="dim small">{i.ref}</div>
+                                {edit && i.verdict !== 'NA' && (
+                                  <div class="ovr row">
+                                    <input type="range" min={0} max={100} step={5} value={Math.round((o?.score ?? i.auto ?? i.score) * 100)} onInput={(e) => p.onOverride!(key, { score: Number(e.currentTarget.value) / 100, note: o?.note })} />
+                                    <span class="mono small" style={{ width: 40 }}>{Math.round((o?.score ?? i.auto ?? i.score) * 100)}%</span>
+                                    <input type="text" class="grow" placeholder="Note to the student (optional)" value={o?.note ?? ''} onInput={(e) => p.onOverride!(key, { score: o?.score ?? i.auto ?? i.score, note: e.currentTarget.value })} />
+                                    {o && (
+                                      <button class="btn small ghost" title="Back to the automatic mark" onClick={() => p.onOverride!(key, null)}>
+                                        ↺ auto
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                              <span class="small" style={{ width: 40, textAlign: 'right' }}>{i.verdict === 'NA' ? '' : `${Math.round(i.score * 100)}%`}</span>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+              </>
+            );
+          })}
         </tbody>
       </table>
     </div>
+  );
+}
+
+function DecisionsTable(p: { w: WargameRecord }) {
+  const ds = p.w.decisions;
+  if (!ds.length) return <div class="muted">No injects arose — your surveillance did not detect the situations that trigger decisions, or the battle ended early.</div>;
+  return (
+    <table class="tbl decisions">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Inject</th>
+          <th>Your response</th>
+          <th>Verdict</th>
+          <th>Why (doctrine)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {ds.map((d) => {
+          const acts = d.actions ?? choiceActions(d.key, { option: d.option });
+          return (
+            <tr class={d.unmarked ? 'unmarked' : ''}>
+              <td class="mono small">{fmtTime(d.time)}</td>
+              <td>
+                <b>{d.title}</b>
+                <div class="small dim">{d.source === 'MAP' ? 'Orders on the map' : d.source === 'PREPLANNED' ? 'Contingency plan (auto)' : d.source === 'SOP' ? 'SOP — not pre-planned' : d.source === 'AI' ? 'AI' : 'Decision card'}</div>
+                {d.changed && <div class="small" style={{ color: '#ffd36a' }}>changed from your contingency plan</div>}
+              </td>
+              <td class="small">
+                {acts.length ? (
+                  <div class="chips">
+                    {acts.map((a) => (
+                      <span class={`chip ${d.gaps?.some((g) => g.includes(ACTIONS[a]?.text ?? '§')) ? 'bad' : ''}`}>{actionText(a, d.key).split(' — ')[0].split(' (')[0]}</span>
+                    ))}
+                    {(d.understood ?? []).map((a) => (
+                      <span class="chip und" title="Understood from your own words">{actionText(a, d.key).split(' — ')[0].split(' (')[0]}</span>
+                    ))}
+                  </div>
+                ) : !d.text ? (
+                  <span class="dim">No action</span>
+                ) : null}
+                {d.text && <div class="quote">“{d.text}”</div>}
+              </td>
+              <td>
+                {d.unmarked ? (
+                  <span class="dim small">not marked</span>
+                ) : (
+                  <>
+                    <b class={`verdict-${d.verdict}`}>{d.verdict}</b>
+                    <div class="dim small">{Math.round(d.score * 100)}%</div>
+                  </>
+                )}
+              </td>
+              <td class="small">
+                {d.strengths?.length || d.gaps?.length ? (
+                  <>
+                    {(d.strengths ?? []).slice(0, 3).map((x) => (
+                      <div class="fbl good">✔ {x}</div>
+                    ))}
+                    {(d.gaps ?? []).slice(0, 3).map((x) => (
+                      <div class="fbl gap">✖ {x}</div>
+                    ))}
+                  </>
+                ) : (
+                  d.rationale
+                )}
+                {d.aiNote && <div class="small" style={{ color: '#e1a6f0' }}>Umpire: {d.aiNote}</div>}
+                <div class="dim">{d.ref}</div>
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
   );
 }
 

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { presetBic49 } from '../src/scenario/presetBic49';
+import { SKETCH_SHIFT, presetBic49 } from '../src/scenario/presetBic49';
 import { generateScenario } from '../src/scenario/generator';
 import { autoPlan } from '../src/plan/plan';
 import { Engine } from '../src/sim/engine';
@@ -33,7 +33,9 @@ function noFirePlan(good: Plan): Plan {
 function poorPlan(good: Plan): Plan {
   const bad: Plan = JSON.parse(JSON.stringify(good));
   bad.units = bad.units.filter((u) => !['SP_PTL', 'LP', 'SCREEN'].includes(u.role));
-  const xs = [1500, 2200, 2900];
+  // sketch coordinates (BIC-49 v2 sheet: + 4500 m E)
+  const X = SKETCH_SHIFT.x;
+  const xs = [1500 + X, 2200 + X, 2900 + X];
   bad.units
     .filter((u) => u.templateKey === 'RIFLE_PL')
     .forEach((u, i) => {
@@ -41,7 +43,7 @@ function poorPlan(good: Plan): Plan {
       u.role = 'FDL';
       u.altPos = undefined;
     });
-  for (const u of bad.units) if (u.templateKey !== 'RIFLE_PL') u.pos = { x: 2200, y: 2700 };
+  for (const u of bad.units) if (u.templateKey !== 'RIFLE_PL') u.pos = { x: 2200 + X, y: 2700 };
   bad.graphics = bad.graphics.filter((g) => g.kind === 'FDL');
   bad.contingency = {
     SCREEN_CONTACT: { option: 'HOLD_ALL_COSTS' },
@@ -94,6 +96,9 @@ test('wargame discriminates a sound plan from poor ones', () => {
 });
 
 test('wargame runs to completion on generated scenarios at every level', () => {
+  // (until v2 the four scenarios below shared one cached terrain raster — same id for the same seed — so
+  // BN/BDE were fought on the PL raster; the cache is now keyed by extent too and each level gets its own)
+  let total = 0;
   for (const level of ['PL', 'COY', 'BN', 'BDE'] as const) {
     const s = generateScenario({ level, terrain: 'SEMI_DESERT', seed: 99 });
     const e = new Engine(s, autoPlan(s), { seed: 3, fog: 'PARTIAL', interactive: false, difficulty: 'STANDARD' });
@@ -102,6 +107,9 @@ test('wargame runs to completion on generated scenarios at every level', () => {
     const sm = e.summary();
     assert.ok(['HELD', 'PARTIAL', 'LOST'].includes(sm.result));
     assert.ok(sm.enCas > 0, `${level}: en took cas`);
-    assert.ok(e.decisions.length >= 3, `${level}: injects raised (${e.decisions.length})`);
+    // at least the screen battle and the reorg; how many more depends on what the fog lets you see
+    assert.ok(e.decisions.length >= 2, `${level}: injects raised (${e.decisions.length})`);
+    total += e.decisions.length;
   }
+  assert.ok(total >= 12, `injects raised across the levels (${total})`);
 });

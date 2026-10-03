@@ -155,6 +155,11 @@ export async function importBundle(b: Bundle, opts: { overwriteSettings?: boolea
         const rank = (a?: Attempt) => (a ? (a.status === 'COMPLETE' ? 3 : a.status === 'SUBMITTED' ? 2 : 1) : 0);
         if (cur && rank(cur) > rank(r as unknown as Attempt)) continue;
       }
+      if (s === 'scenarios') {
+        // never downgrade a preset to an older map frame (attempts are migrated by ensureSeed)
+        const cur = (await db.get('scenarios', r.id)) as Scenario | undefined;
+        if (cur?.source === 'preset' && ((r as unknown as Scenario).version ?? 1) < (cur.version ?? 1)) continue;
+      }
       await db.put(s, r as never);
       n++;
     }

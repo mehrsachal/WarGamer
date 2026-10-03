@@ -1,31 +1,76 @@
 // Preset: "TE DEF – BIC 49" — Coy AOR, Comprehensive Def (Blueland vs Foxland).
 // Recreated from the issued sketch (1 sq = 500 m, eastings 12-21, northings 64-83)
 // and the student issue narrative. DS solution follows the SI&T Def Aprc guideline.
+//
+// v2: the map sheet is a landscape rectangle (eastings 03-30, 13.5 x 9.5 km). The issued sketch
+// is kept untouched in the centre; plausible flank terrain (105 Bde area to the W, B Coy and the
+// Rt fwd Bn to the E) joins it at the seams. Everything is authored in the sketch frame (x = 0 at
+// easting 12) and translated into the map frame by SKETCH_SHIFT.
 
 import type { Vec } from '../core/geom';
-import { ellipsePoly } from '../core/geom';
+import { ellipsePoly, polylineIntersection } from '../core/geom';
 import { dDay } from '../core/time';
-import type { Feature, Scenario } from '../core/types';
+import type { Feature, LinearFeature, Scenario } from '../core/types';
+import { type FrameMigration, translateScenario } from './transform';
 
 const SQ = 500;
 const E0 = 12;
 const N0 = 64;
-/** Grid (easting, northing) as on the sketch -> metres. */
+/** Westernmost easting of the v2 map sheet. */
+const MAP_E0 = 3;
+/** Map sheet width in grid squares (eastings 03-30). */
+const MAP_SQ_E = 27;
+/** Sketch rows (northings 64-83). */
+const MAP_SQ_N = 19;
+/** Shift from the sketch frame (x = 0 at easting 12) to the map frame (x = 0 at easting 03). */
+export const SKETCH_SHIFT: Vec = { x: (E0 - MAP_E0) * SQ, y: 0 };
+export const BIC49_ID = 'preset_bic49_te_def';
+/** Geometry version of the preset. v1 = 4.5 km sketch strip; v2 = 13.5 km landscape sheet. */
+export const BIC49_VERSION = 2;
+/** Work made on older versions is shifted by these amounts (applied by ui/data.ts ensureSeed). */
+export const BIC49_MIGRATIONS: FrameMigration[] = [{ to: 2, shift: SKETCH_SHIFT }];
+
+/** Grid (easting, northing) as on the sketch -> metres (sketch frame). */
 const g = (e: number, n: number): Vec => ({ x: (e - E0) * SQ, y: (n - N0) * SQ });
 const gp = (pts: [number, number][]): Vec[] => pts.map(([e, n]) => g(e, n));
 const rect = (e0: number, n0: number, e1: number, n1: number): Vec[] => gp([[e0, n0], [e1, n0], [e1, n1], [e0, n1]]);
 const blob = (e: number, n: number, rx: number, ry: number): Vec[] => ellipsePoly(g(e, n), rx * SQ, ry * SQ, 0, 14);
+
+type GP = [number, number][];
+/** Continuations of the sketch's linear features into the W flank (W -> E up to the seam, except trTanda which runs on westward). */
+const W: Record<'border' | 'nullah' | 'disty' | 'trTanda' | 'trLat78' | 'trHut' | 'trHafizabad' | 'trLat68', GP> = {
+  border: [[3, 81.5], [4.2, 81.56], [5.5, 81.47], [6.35, 81.45], [7.5, 81.52], [9, 81.44], [10.5, 81.48], [11.3, 81.45]],
+  nullah: [[3, 73.6], [3.8, 73.72], [4.9, 73.95], [5.8, 74.12], [6.8, 74.05], [7.9, 73.86], [8.9, 73.7], [9.8, 73.72], [10.7, 73.88], [11.4, 73.9]],
+  disty: [[3, 69.38], [4, 69.42], [5, 69.5], [6, 69.55], [7, 69.58], [8, 69.62], [9, 69.65], [10, 69.68], [11, 69.7]],
+  // the sketch's NW track (BOP 61 - W edge) runs on through Gulpur to Mianwala
+  trTanda: [[11.2, 78.95], [10.55, 78.85], [9.4, 78.5], [8.3, 78.38], [7.3, 78.32]],
+  trLat78: [[3, 78.2], [4, 78.0], [5, 77.7], [6, 77.4], [7.32, 77.2], [8, 77.3], [9, 77.5], [10, 77.6], [11, 77.72]],
+  trHut: [[3, 73.1], [4.2, 73.0], [5.3, 72.88], [6, 72.7], [7, 72.5], [7.9, 72.38], [8.85, 72.35], [9.4, 72.45], [10.3, 72.65], [11.2, 72.8]],
+  trHafizabad: [[8.62, 71.0], [9.6, 70.9], [10.4, 70.85], [11.2, 70.92]],
+  trLat68: [[3, 66.7], [4.2, 66.9], [5.3, 67.1], [6.4, 67.2], [7.2, 67.2], [8.2, 67.25], [9.15, 67.3], [10.1, 67.45], [11, 67.62]],
+};
+/** Continuations into the E flank (W -> E from the seam, except chak18Rd which is prepended). */
+const E: Record<'border' | 'nullah' | 'disty' | 'chak18Rd' | 'trLat78' | 'trChak23' | 'trLat68', GP> = {
+  border: [[22.2, 81.36], [23.5, 81.33], [24.25, 81.3], [25.5, 81.24], [26.8, 81.3], [28, 81.38], [29.2, 81.33], [30, 81.36]],
+  nullah: [[21.8, 74.12], [22.7, 74.0], [23.6, 73.86], [24.5, 73.9], [25.4, 74.06], [26.3, 74.15], [27.2, 74.06], [28.1, 73.88], [29.0, 73.82], [30, 73.92]],
+  disty: [[22, 69.99], [23, 70.0], [24, 70.02], [25, 70.0], [26, 69.98], [27, 69.96], [28, 69.9], [29, 69.85], [30, 69.82]],
+  // Rd Chak 18 - Nasirabad comes in from BOP 63 through Hayatabad
+  chak18Rd: [[24.2, 81.1], [23.95, 80.2], [23.6, 79.3], [23.25, 78.45], [22.6, 77.85], [21.8, 77.35]],
+  trLat78: [[21.8, 78.33], [22.5, 78.4], [22.85, 78.42], [23.65, 78.45], [24.6, 78.2], [25.6, 77.85], [26.6, 77.5], [27.4, 77.5], [28.4, 77.7], [29.2, 77.9], [30, 78.0]],
+  trChak23: [[21.8, 72.5], [22.7, 72.25], [23.55, 72.15], [23.9, 72.15], [24.8, 72.0], [25.6, 71.9], [26.15, 71.75]],
+  trLat68: [[22.0, 68.75], [23.0, 68.45], [24.0, 67.9], [24.85, 67.2]],
+};
 
 let fid = 0;
 const id = () => `bic_f${++fid}`;
 
 const features: Feature[] = [
   // ---- international border
-  { id: id(), kind: 'border', name: 'Interstate Bdry', pts: gp([[12, 81.42], [13, 81.36], [14.5, 81.3], [16, 81.3], [17.5, 81.33], [19, 81.35], [20.3, 81.25], [21, 81.3]]) },
+  { id: id(), kind: 'border', name: 'Interstate Bdry', pts: gp([...W.border, [12, 81.42], [13, 81.36], [14.5, 81.3], [16, 81.3], [17.5, 81.33], [19, 81.35], [20.3, 81.25], [21, 81.3], ...E.border]) },
 
   // ---- water obstacles
-  { id: id(), kind: 'nullah', name: 'Dry Nullah', width: 22, pts: gp([[12, 73.85], [12.6, 73.98], [13.5, 74.0], [14.4, 73.95], [14.95, 73.82], [15.5, 73.86], [16.2, 73.95], [16.6, 74.05], [17.5, 74.05], [18.5, 74.0], [19.5, 73.96], [20.2, 74.02], [21, 74.06]]) },
-  { id: id(), kind: 'disty', name: 'Disty No 5', width: 10, pts: gp([[12, 69.72], [13, 69.8], [14, 69.88], [15, 69.94], [16, 69.95], [17, 69.95], [18, 69.96], [19, 69.97], [20, 69.97], [21, 69.98]]) },
+  { id: id(), kind: 'nullah', name: 'Dry Nullah', width: 22, pts: gp([...W.nullah, [12, 73.85], [12.6, 73.98], [13.5, 74.0], [14.4, 73.95], [14.95, 73.82], [15.5, 73.86], [16.2, 73.95], [16.6, 74.05], [17.5, 74.05], [18.5, 74.0], [19.5, 73.96], [20.2, 74.02], [21, 74.06], ...E.nullah]) },
+  { id: id(), kind: 'disty', name: 'Disty No 5', width: 10, pts: gp([...W.disty, [12, 69.72], [13, 69.8], [14, 69.88], [15, 69.94], [16, 69.95], [17, 69.95], [18, 69.96], [19, 69.97], [20, 69.97], [21, 69.98], ...E.disty]) },
 
   // ---- relative heights ("r")
   { id: id(), kind: 'height', name: '6 r', c: g(16.45, 80.2), rx: 0.45 * SQ, ry: 0.12 * SQ, rot: 0, h: 6 },
@@ -101,21 +146,21 @@ const features: Feature[] = [
   // ---- roads (metalled)
   { id: id(), kind: 'road', name: 'Rd Tanda - Khairpur - Qasimabad - Jaleelabad', cls: 'Cl 9 A 1', pts: gp([[14.3, 78.2], [14.35, 77.6], [14.4, 77.0], [14.55, 76.4], [14.9, 75.9], [15.0, 75.4], [15.0, 74.5], [14.97, 73.82], [15.0, 72.0], [15.03, 70.6], [15.03, 69.94], [15.05, 68.6], [15.1, 67.6], [15.6, 67.1], [16.3, 66.7], [17.0, 66.3], [17.6, 65.9], [18.1, 65.45], [18.25, 64.6], [18.25, 64.0]]) },
   { id: id(), kind: 'road', name: 'Rd Aliabad - Alipur - Islampur - Wazirabad', cls: 'Cl 30 A 1', pts: gp([[19.55, 78.0], [19.0, 77.4], [18.65, 76.4], [18.55, 75.4], [18.4, 74.6], [18.25, 73.9], [18.1, 73.0], [17.95, 72.3], [17.9, 71.6], [17.95, 70.8], [18.4, 70.72], [19.0, 70.6], [19.3, 69.97], [19.4, 69.4], [19.5, 68.5], [19.6, 67.5], [19.8, 66.8], [19.9, 66.2]]) },
-  { id: id(), kind: 'road', name: 'Rd Chak 18 - Nasirabad - Jaleelabad', cls: 'Cl 30 A 1', pts: gp([[21, 77.1], [20.7, 76.4], [20.55, 75.4], [20.4, 74.4], [20.05, 73.4], [19.75, 72.5], [19.5, 71.5], [19.38, 70.6], [19.32, 69.97]]) },
+  { id: id(), kind: 'road', name: 'Rd Chak 18 - Nasirabad - Jaleelabad', cls: 'Cl 30 A 1', pts: gp([...E.chak18Rd, [21, 77.1], [20.7, 76.4], [20.55, 75.4], [20.4, 74.4], [20.05, 73.4], [19.75, 72.5], [19.5, 71.5], [19.38, 70.6], [19.32, 69.97]]) },
 
   // ---- tracks (Cl 9 F 1)
-  { id: id(), kind: 'track', cls: 'Cl 9 F 1', pts: gp([[13.45, 81.32], [13.4, 80.3], [13.0, 79.6], [12.0, 79.2]]) },
-  { id: id(), kind: 'track', cls: 'Cl 9 F 1', pts: gp([[12, 77.8], [13, 77.86], [14.1, 78.15], [15.5, 78.2], [17, 78.25], [18.3, 78.15], [19.35, 78.15], [21, 78.3]]) },
+  { id: id(), kind: 'track', cls: 'Cl 9 F 1', pts: gp([[13.45, 81.32], [13.4, 80.3], [13.0, 79.6], [12.0, 79.2], ...W.trTanda]) },
+  { id: id(), kind: 'track', cls: 'Cl 9 F 1', pts: gp([...W.trLat78, [12, 77.8], [13, 77.86], [14.1, 78.15], [15.5, 78.2], [17, 78.25], [18.3, 78.15], [19.35, 78.15], [21, 78.3], ...E.trLat78]) },
   { id: id(), kind: 'track', cls: 'Cl 9 F 1', pts: gp([[14.75, 81.1], [14.6, 80.0], [14.45, 79.0], [14.35, 78.36]]) },
   { id: id(), kind: 'track', cls: 'Cl 9 F 1', pts: gp([[18.6, 81.05], [17.95, 79.4], [17.75, 78.5], [17.3, 77.3], [16.95, 76.2], [16.65, 75.2], [16.6, 74.1], [16.55, 73.0], [16.7, 72.1], [16.55, 71.45]]) },
   { id: id(), kind: 'track', cls: 'Cl 9 F 1', pts: gp([[16.55, 71.0], [16.85, 70.2], [16.75, 69.2], [16.5, 68.2]]) },
   { id: id(), kind: 'track', cls: 'Cl 9 F 1', pts: gp([[18.75, 81.15], [18.85, 82.0], [19.2, 82.75]]) },
   { id: id(), kind: 'track', cls: 'Cl 9 F 1', pts: gp([[14.85, 81.85], [14.8, 82.25]]) },
-  { id: id(), kind: 'track', cls: 'Cl 9 F 1', pts: gp([[12, 72.9], [13.5, 72.95], [14.4, 73.35], [15.5, 73.3], [16.3, 73.4], [17.0, 73.62]]) },
+  { id: id(), kind: 'track', cls: 'Cl 9 F 1', pts: gp([...W.trHut, [12, 72.9], [13.5, 72.95], [14.4, 73.35], [15.5, 73.3], [16.3, 73.4], [17.0, 73.62]]) },
   { id: id(), kind: 'track', cls: 'Cl 9 F 1', pts: gp([[17.85, 73.75], [18.8, 73.7], [19.55, 73.5]]) },
-  { id: id(), kind: 'track', cls: 'Cl 9 F 1', pts: gp([[20.25, 73.5], [21, 72.9]]) },
-  { id: id(), kind: 'track', cls: 'Cl 9 F 1', pts: gp([[12, 71.0], [12.8, 71.1], [13.6, 71.4], [14.6, 71.8], [15.4, 72.0], [16.25, 71.3]]) },
-  { id: id(), kind: 'track', cls: 'Cl 9 F 1', pts: gp([[12, 67.8], [12.8, 68.0], [13.6, 68.1], [15.0, 68.05], [16.1, 68.0], [16.9, 67.8], [18.0, 67.9], [19.0, 68.4], [20.2, 68.8], [21, 68.9]]) },
+  { id: id(), kind: 'track', cls: 'Cl 9 F 1', pts: gp([[20.25, 73.5], [21, 72.9], ...E.trChak23]) },
+  { id: id(), kind: 'track', cls: 'Cl 9 F 1', pts: gp([...W.trHafizabad, [12, 71.0], [12.8, 71.1], [13.6, 71.4], [14.6, 71.8], [15.4, 72.0], [16.25, 71.3]]) },
+  { id: id(), kind: 'track', cls: 'Cl 9 F 1', pts: gp([...W.trLat68, [12, 67.8], [12.8, 68.0], [13.6, 68.1], [15.0, 68.05], [16.1, 68.0], [16.9, 67.8], [18.0, 67.9], [19.0, 68.4], [20.2, 68.8], [21, 68.9], ...E.trLat68]) },
   { id: id(), kind: 'track', cls: 'Cl 9 F 1', pts: gp([[20.6, 80.9], [19.9, 79.6], [19.62, 78.36]]) },
   { id: id(), kind: 'track', cls: 'Cl 9 F 1', pts: gp([[18.35, 65.3], [19.6, 65.85]]) },
   { id: id(), kind: 'track', cls: 'Cl 9 F 1', pts: gp([[15.0, 64.0], [15.6, 64.6], [16.6, 64.9], [17.3, 65.3]]) },
@@ -126,17 +171,184 @@ const features: Feature[] = [
   { id: id(), kind: 'bridge', name: 'Br 3', pos: g(19.31, 69.97), rot: 90 },
 ];
 
+// ==================================================================== flanks (v2)
+// W: 105 Bde area (excl Hafizabad belongs to it). E: B Coy and the Rt fwd Bn of 250 Bde, incl Hayatabad.
+
+const westRoad: LinearFeature = {
+  id: id(),
+  kind: 'road',
+  name: 'Rd Mianwala - Sherpur - Noorpur',
+  cls: 'Cl 30 A 1',
+  pts: gp([[6.3, 81.2], [6.45, 80.3], [6.75, 79.2], [6.95, 78.35], [7.3, 77.2], [7.65, 75.9], [7.9, 74.8], [8.05, 73.8], [8.2, 73.0], [8.35, 72.3], [8.55, 71.3], [8.7, 70.4], [8.8, 69.6], [8.95, 68.5], [9.15, 67.3], [9.3, 66.25], [9.4, 65.2], [9.5, 64]]),
+};
+const eastRoad: LinearFeature = {
+  id: id(),
+  kind: 'road',
+  name: 'Rd Kot Bahadur - Sadiqpur',
+  cls: 'Cl 9 A 1',
+  pts: gp([[28.0, 81.15], [27.75, 80.0], [27.35, 78.6], [27.0, 77.45], [26.85, 76.2], [26.75, 75.0], [26.68, 74.1], [26.5, 73.0], [26.2, 71.8], [25.95, 70.6], [25.85, 69.98], [25.6, 68.8], [25.25, 67.2], [25.1, 66.0], [25.0, 64]]),
+};
+const minorCanal: LinearFeature = {
+  id: id(),
+  kind: 'canal',
+  name: 'Kot Bahadur Minor',
+  width: 14,
+  pts: gp([[30, 66.42], [29.2, 66.55], [28.4, 66.6], [27.6, 66.5], [26.8, 66.42], [26.0, 66.36], [25.1, 66.32], [24.6, 66.26], [24.3, 66.2]]),
+};
+
+const flankFeatures: Feature[] = [
+  westRoad,
+  eastRoad,
+  minorCanal,
+
+  // ---- relative heights
+  { id: id(), kind: 'height', name: '12 r', c: g(9.0, 76.5), rx: 0.5 * SQ, ry: 0.12 * SQ, rot: 0, h: 12 },
+  { id: id(), kind: 'height', name: '7 r', c: g(5.7, 79.9), rx: 0.4 * SQ, ry: 0.1 * SQ, rot: 0, h: 7 },
+  { id: id(), kind: 'height', name: '14 r', c: g(10.3, 73.3), rx: 0.45 * SQ, ry: 0.11 * SQ, rot: 0, h: 14 },
+  { id: id(), kind: 'height', name: '5 r', c: g(6.9, 70.5), rx: 0.4 * SQ, ry: 0.1 * SQ, rot: 0, h: 5 },
+  { id: id(), kind: 'height', name: '13 r', c: g(4.4, 75.5), rx: 0.5 * SQ, ry: 0.12 * SQ, rot: 0, h: 13 },
+  { id: id(), kind: 'height', c: g(11.0, 66.9), rx: 0.4 * SQ, ry: 0.1 * SQ, rot: 0, h: 6 },
+  { id: id(), kind: 'height', c: g(8.6, 80.55), rx: 0.35 * SQ, ry: 0.08 * SQ, rot: 0, h: 4 },
+  { id: id(), kind: 'height', name: '16 r', c: g(23.0, 73.3), rx: 0.45 * SQ, ry: 0.11 * SQ, rot: 0, h: 16 },
+  { id: id(), kind: 'height', name: '18 r', c: g(27.9, 76.3), rx: 0.55 * SQ, ry: 0.13 * SQ, rot: 0, h: 18 },
+  { id: id(), kind: 'height', name: '4 r', c: g(25.4, 80.4), rx: 0.35 * SQ, ry: 0.08 * SQ, rot: 0, h: 4 },
+  { id: id(), kind: 'height', c: g(24.3, 69.2), rx: 0.4 * SQ, ry: 0.1 * SQ, rot: 0, h: 7 },
+  { id: id(), kind: 'height', c: g(29.2, 72.4), rx: 0.4 * SQ, ry: 0.1 * SQ, rot: 0, h: 5 },
+
+  // ---- kidney bunds
+  { id: id(), kind: 'kbund', name: 'Kidney Bund 2', c: g(22.3, 79.4), r: 0.38 * SQ, rot: 180 },
+  { id: id(), kind: 'kbund', name: 'Kidney Bund 4', c: g(9.7, 77.95), r: 0.36 * SQ, rot: 180 },
+  { id: id(), kind: 'kbund', name: 'Kidney Bund 5', c: g(25.2, 75.3), r: 0.36 * SQ, rot: 180 },
+
+  // ---- dunes
+  { id: id(), kind: 'dunes', poly: blob(4.6, 80.3, 0.4, 0.1) },
+  { id: id(), kind: 'dunes', poly: blob(9.6, 80.15, 0.35, 0.1) },
+  { id: id(), kind: 'dunes', poly: blob(3.7, 79.0, 0.3, 0.09) },
+  { id: id(), kind: 'dunes', poly: blob(26.3, 80.15, 0.4, 0.1) },
+  { id: id(), kind: 'dunes', poly: blob(29.3, 80.0, 0.35, 0.1) },
+  { id: id(), kind: 'dunes', poly: blob(22.9, 80.65, 0.3, 0.08) },
+
+  // ---- trees / clumps
+  { id: id(), kind: 'trees', name: 'Clump 3', poly: blob(9.05, 75.2, 0.25, 0.2) },
+  { id: id(), kind: 'trees', name: 'Clump 4', poly: blob(24.7, 76.2, 0.22, 0.2) },
+  { id: id(), kind: 'trees', name: 'Clump 5', poly: blob(5.5, 70.9, 0.2, 0.18) },
+  { id: id(), kind: 'trees', poly: blob(3.8, 76.6, 0.18, 0.15) },
+  { id: id(), kind: 'trees', poly: blob(7.6, 80.7, 0.2, 0.1) },
+  { id: id(), kind: 'trees', poly: blob(11.2, 69.0, 0.15, 0.15) },
+  { id: id(), kind: 'trees', poly: blob(6.6, 65.3, 0.25, 0.12) },
+  { id: id(), kind: 'trees', poly: blob(10.9, 64.8, 0.15, 0.15) },
+  { id: id(), kind: 'trees', poly: blob(21.9, 76.3, 0.15, 0.15) },
+  { id: id(), kind: 'trees', poly: blob(22.2, 67.1, 0.2, 0.15) },
+  { id: id(), kind: 'trees', poly: blob(26.4, 72.6, 0.18, 0.15) },
+  { id: id(), kind: 'trees', poly: blob(29.4, 68.3, 0.2, 0.15) },
+  { id: id(), kind: 'trees', poly: blob(28.9, 79.0, 0.2, 0.12) },
+  { id: id(), kind: 'trees', poly: blob(27.2, 65.2, 0.25, 0.12) },
+  { id: id(), kind: 'grass', name: 'Tall Grass', poly: blob(3.9, 71.6, 0.35, 0.18) },
+  { id: id(), kind: 'grass', name: 'Tall Grass', poly: blob(29.0, 70.9, 0.3, 0.16) },
+
+  { id: id(), kind: 'broken', name: 'Broken Gr', poly: gp([[5.2, 75.05], [6.0, 75.1], [6.05, 75.6], [5.25, 75.65]]) },
+  { id: id(), kind: 'broken', name: 'Broken Gr', poly: gp([[25.9, 79.0], [26.7, 79.05], [26.75, 79.5], [25.95, 79.55]]) },
+
+  // ---- BUAs (Foxland)
+  { id: id(), kind: 'bua', name: 'SHIVPUR', storeys: 1, poly: rect(6.3, 82.4, 6.7, 82.75) },
+  { id: id(), kind: 'bua', storeys: 1, poly: rect(6.75, 82.5, 7.05, 82.8) },
+  { id: id(), kind: 'bua', name: 'RAMPURA', storeys: 1, poly: rect(10.3, 82.55, 10.65, 82.85) },
+  { id: id(), kind: 'bua', name: 'DEVIPUR', storeys: 1, poly: rect(3.4, 82.5, 3.75, 82.75) },
+  { id: id(), kind: 'bua', name: 'KISHANPUR', storeys: 1, poly: rect(24.3, 82.4, 24.7, 82.75) },
+  { id: id(), kind: 'bua', storeys: 1, poly: rect(24.75, 82.5, 25.05, 82.8) },
+  { id: id(), kind: 'bua', name: 'DEVIGARH', storeys: 1, poly: rect(28.2, 82.5, 28.6, 82.8) },
+  // ---- BUAs (Blueland, W)
+  { id: id(), kind: 'bua', name: 'MIANWALA', storeys: 1, poly: rect(6.55, 78.2, 6.9, 78.5) },
+  { id: id(), kind: 'bua', storeys: 1, poly: rect(7.0, 78.15, 7.3, 78.45) },
+  { id: id(), kind: 'bua', name: 'GULPUR', storeys: 1, poly: rect(10.0, 78.86, 10.4, 79.1) },
+  { id: id(), kind: 'bua', name: 'KOT SADIQ', storeys: 1, poly: rect(10.6, 75.4, 10.95, 75.65) },
+  { id: id(), kind: 'bua', name: 'SHERPUR', storeys: 2, poly: rect(7.85, 72.45, 8.28, 72.75) },
+  { id: id(), kind: 'bua', storeys: 2, poly: rect(8.42, 72.4, 8.85, 72.72) },
+  { id: id(), kind: 'bua', storeys: 1, poly: rect(8.0, 71.95, 8.4, 72.2) },
+  { id: id(), kind: 'bua', name: 'DHOK FATEH', storeys: 1, poly: rect(4.95, 72.95, 5.3, 73.2) },
+  { id: id(), kind: 'bua', name: 'CHAK 21', storeys: 1, poly: rect(4.1, 68.55, 4.45, 68.85) },
+  { id: id(), kind: 'bua', name: 'MEHRPUR', storeys: 1, poly: rect(6.0, 67.3, 6.4, 67.6) },
+  { id: id(), kind: 'bua', name: 'NOORPUR', storeys: 1, poly: rect(8.85, 66.1, 9.22, 66.45) },
+  { id: id(), kind: 'bua', storeys: 1, poly: rect(9.38, 66.05, 9.75, 66.35) },
+  // ---- BUAs (Blueland, E)
+  { id: id(), kind: 'bua', name: 'HAYATABAD', storeys: 1, poly: rect(22.85, 78.5, 23.18, 78.8) },
+  { id: id(), kind: 'bua', storeys: 1, poly: rect(23.32, 78.5, 23.68, 78.78) },
+  { id: id(), kind: 'bua', storeys: 1, poly: rect(22.95, 78.05, 23.3, 78.3) },
+  { id: id(), kind: 'bua', name: 'CHAK 23', storeys: 1, poly: rect(23.55, 72.3, 23.9, 72.58) },
+  { id: id(), kind: 'bua', name: 'KOT BAHADUR', storeys: 1, poly: rect(26.55, 77.6, 26.92, 77.88) },
+  { id: id(), kind: 'bua', storeys: 1, poly: rect(27.08, 77.55, 27.42, 77.85) },
+  { id: id(), kind: 'bua', name: 'SADIQPUR', storeys: 2, poly: rect(24.75, 67.3, 25.12, 67.62) },
+  { id: id(), kind: 'bua', storeys: 1, poly: rect(25.35, 67.28, 25.75, 67.58) },
+  { id: id(), kind: 'bua', name: 'MEHRABAD', storeys: 1, poly: rect(29.25, 66.85, 29.6, 67.12) },
+  { id: id(), kind: 'bua', name: 'NOORABAD', storeys: 1, poly: rect(22.4, 65.2, 22.8, 65.5) },
+  { id: id(), kind: 'bua', name: 'DHOK MEHR', storeys: 1, poly: rect(27.4, 70.75, 27.72, 71.0) },
+  { id: id(), kind: 'graveyard', name: 'Grave yard', pos: g(9.05, 73.05) },
+  { id: id(), kind: 'graveyard', name: 'Grave yard', pos: g(24.05, 77.55) },
+
+  // ---- BOPs (numbered W -> E: 59/60 | 61/62 sketch | 63/64; Foxland 79/80 | 81/82 | 83/84)
+  { id: id(), kind: 'bop', name: 'BOP 79', pos: g(6.4, 81.85), side: 'RED' },
+  { id: id(), kind: 'bop', name: 'BOP 80', pos: g(10.45, 81.9), side: 'RED' },
+  { id: id(), kind: 'bop', name: 'BOP 83', pos: g(24.3, 81.8), side: 'RED' },
+  { id: id(), kind: 'bop', name: 'BOP 84', pos: g(28.1, 81.85), side: 'RED' },
+  { id: id(), kind: 'bop', name: 'BOP 59', pos: g(6.25, 81.15), side: 'BLUE' },
+  { id: id(), kind: 'bop', name: 'BOP 60', pos: g(10.35, 81.12), side: 'BLUE' },
+  { id: id(), kind: 'bop', name: 'BOP 63', pos: g(24.15, 81.05), side: 'BLUE' },
+  { id: id(), kind: 'bop', name: 'BOP 64', pos: g(27.95, 81.1), side: 'BLUE' },
+
+  // ---- tracks (Cl 9 F 1)
+  ...([
+    // W
+    [[6.3, 81.2], [6.4, 81.85], [6.5, 82.4]],
+    [[10.35, 81.12], [10.0, 80.2], [10.15, 79.1]],
+    [[10.35, 81.12], [10.45, 81.9], [10.48, 82.55]],
+    [[5.1, 72.95], [5.0, 74.5], [4.8, 76.0], [4.6, 77.85]],
+    [[5.1, 72.95], [5.0, 71.2], [4.6, 70.0], [4.3, 68.85], [4.1, 67.6], [4.0, 66.85], [3.9, 64]],
+    [[10.75, 75.4], [10.3, 74.5], [9.8, 73.6], [9.6, 72.55]],
+    [[10.8, 75.65], [10.5, 76.8], [10.0, 77.6]],
+    [[6.2, 67.3], [6.1, 66.0], [5.9, 64]],
+    [[3.6, 82.5], [4.6, 82.2], [6.3, 82.5]],
+    // E
+    [[24.2, 81.1], [24.3, 81.8], [24.45, 82.4]],
+    [[28.0, 81.15], [28.1, 81.85], [28.35, 82.5]],
+    [[23.0, 78.05], [23.2, 77.0], [23.35, 75.6], [23.45, 74.0], [23.65, 72.58], [23.75, 71.0], [23.85, 70.0], [24.0, 68.0]],
+    [[22.6, 65.5], [22.7, 66.8], [22.9, 68.5]],
+    [[26.05, 71.0], [26.8, 70.85], [27.4, 70.85]],
+    [[25.75, 67.4], [27.0, 67.6], [28.4, 67.4], [29.25, 67.0]],
+    [[27.75, 80.0], [26.6, 80.35], [25.4, 80.55], [24.0, 80.25]],
+  ] as GP[]).map((pts): Feature => ({ id: id(), kind: 'track', cls: 'Cl 9 F 1', pts: gp(pts) })),
+];
+
+/**
+ * Micro-relief frame of the v1 sketch (seed from its 4.5 x 9.5 km extent and feature count, origin at
+ * easting 12, i.e. the sketch frame origin; translated with the scenario): the issued sketch area keeps
+ * exactly the v1 ground, so LOS and the wargame balance are unchanged.
+ */
+const SKETCH_NOISE = { seed: `terrain-${9 * SQ}-${MAP_SQ_N * SQ}-${features.length}`, origin: { x: 0, y: 0 } };
+
+// bridges where the flank roads cross water (computed, so they sit exactly on the crossings)
+{
+  const waters = [...features, ...flankFeatures].filter((f): f is LinearFeature => f.kind === 'nullah' || f.kind === 'disty' || f.kind === 'canal');
+  let br = 3;
+  for (const r of [westRoad, eastRoad]) {
+    for (const w of waters) {
+      const x = polylineIntersection(r.pts, w.pts);
+      if (x) flankFeatures.push({ id: id(), kind: 'bridge', name: `Br ${++br}`, pos: x, rot: 90 });
+    }
+  }
+}
+
 export function presetBic49(): Scenario {
   const light = { firstLight: 345, lastLight: 1125, moon: 'half' as const };
-  return {
-    id: 'preset_bic49_te_def',
+  const sketch: Scenario = {
+    id: BIC49_ID,
     title: 'TE DEF – BIC 49',
     subtitle: 'Coy AOR — Comprehensive Def (A Coy 139 Baloch)',
     level: 'COY',
     source: 'preset',
     seed: 4949,
     createdAt: Date.UTC(2026, 0, 1),
-    terrain: { width: 9 * SQ, height: 19 * SQ, cell: 25, gridSq: SQ, gridOrigin: { e: E0, n: N0 }, features, type: 'PLAINS' },
+    version: BIC49_VERSION,
+    terrain: { width: MAP_SQ_E * SQ, height: MAP_SQ_N * SQ, cell: 25, gridSq: SQ, gridOrigin: { e: MAP_E0, n: N0 }, features: [...features, ...flankFeatures], type: 'PLAINS', noise: SKETCH_NOISE },
     narrative: [
       { key: 'aim', title: 'Aim', body: 'To train student offrs about Conduct of Def incl Sel & Occupation of Def, Siting of Wpns & incorporating Surv Plan under MDO envmt.' },
       { key: 'gen_idea', title: 'Gen Idea', body: "Blueland (BL) and Foxland (FL) are two neighbouring states with their interstate bdry as shown on sketch. Relations b/w the two states have remained strained due to ideological diff and long outstanding territorial disputes ever since their independence. Sit has been further aggravated by recent suicidal attk on FL's mil cny in Pahlgham. FL without a second thought has deemed BL resp for the incident. In order to gain the sympathies of her masses, FL has conc its forces all along the border and war seems imminent.\n\nReportedly, FL is prep to launch an attk along axis Gandhi Nagar - Quaidabad with a view to threaten Quaidabad which is an imp comm cen (loc 12 KMs South of sketch). Conc of a Bde plus size force with a sqn armr is reported in area Gandhi Nagar (10 KMs North of sketch). The attk of en is expected any time after D Day." },
@@ -144,7 +356,7 @@ export function presetBic49(): Scenario {
       { key: 'narr_co', title: 'CO’s O Gp', body: 'CO 139 Baloch called his O gp at Quaidabad on D - 3 (today) at 1000 hrs and said, “Gentlemen, we have received formal OOs from Bde HQ. As per Bde Comd’s vis, en is prep to attk our posns any time after first lt D Day with a bde plus size force sp by an armr sqn.”\n\nMsn. Take up def posn from excl Hafizabad to incl Hayatabad.\n\nExec — Gen Outline. Def will be taken with two coys up as fol:-\n    Lt Fwd   -  A Coy (Own Coy)\n    Rt Fwd   -  B Coy\n    Lt Depth -  C Coy\n    Rt Depth -  D Coy' },
       { key: 'atts', title: 'Atts and Dets', body: 'UC   -  Pl LAT ex 127 Baloch\n         Pl ex 105 Fd Engrs\nDS   -  P Bty 112 Fd Regt Arty\nIn Sp -  112 Fd Regt Arty less P Bty' },
       { key: 'exec', title: 'Exec (Coy Tasks)', body: 'A Coy — Gp: Narr 1. Tasks: Narr 1.\n\nB Coy — Gp: Normal. Tasks: Take up def posns within given bdrys by 1st lt D Day. Def line to conform with the FDLs of A Coy.\n\nC Coy — Gp: Normal. Tasks: Take up def posns within given bdrys; def to be ready by first lt D Day; send a Pl size Bn Screens in consultation with Coy Comd A Coy; be prep to launch C attk on orders; be prep to occupy C pen posns on orders.\n\nD Coy — Gp: Normal. Tasks: Take up def posns within given bdrys; def to be ready by first lt D Day; be prep to launch C attk on orders; be prep to occupy C pen posns on orders.' },
-      { key: 'topo', title: 'Topo Notes', body: 'The AOO resembles the plains of Punjab. The area is gen flat, open and extensively cultivated. The soil is firm and x-cty mov is possible during dry weather, however, during rainy season, it is restd to existing rds and trs. The area is criss crossed with numerous rds / trs inter connecting various vills and towns in the area. F of F and obsn is aval upto 800 - 1500 ms.\n\nRds / Trs\n  Rd Aliabad - Alipur - Islampur - Wazirabad  -  Cl 30 A 1\n  Rd Chak 18 - Nasirabad - Jaleelabad  -  Cl 30 A 1\n  Rd Tanda - Khairpur - Qasimabad - Jaleelabad  -  Cl 9 A 1\n  All Trs  -  Cl 9 F 1\n\nObs\n  Broken Gr. Complete obs for wh vehs, however, impedes mov of tr vehs.\n  Disty No 5. Not an obs for wh and tr vehs however impedes mov.\n  Dry Nullah. Not an obs for wh and tr vehs however impedes mov.\n  BUAs. Area is densely populated. The vills / towns are loc gen on the higher gr than surroundings. Jaleel Abad is med size town with double storied houses.\n\nCover. Cover is aval in the form of scattered trees, clumps, relative hts and BUAs.' },
+      { key: 'topo', title: 'Topo Notes', body: 'The AOO resembles the plains of Punjab. The area is gen flat, open and extensively cultivated. The soil is firm and x-cty mov is possible during dry weather, however, during rainy season, it is restd to existing rds and trs. The area is criss crossed with numerous rds / trs inter connecting various vills and towns in the area. F of F and obsn is aval upto 800 - 1500 ms.\n\nRds / Trs\n  Rd Aliabad - Alipur - Islampur - Wazirabad  -  Cl 30 A 1\n  Rd Chak 18 - Nasirabad - Jaleelabad  -  Cl 30 A 1\n  Rd Tanda - Khairpur - Qasimabad - Jaleelabad  -  Cl 9 A 1\n  Rd Mianwala - Sherpur - Noorpur (105 Bde area)  -  Cl 30 A 1\n  Rd Kot Bahadur - Sadiqpur (E flank)  -  Cl 9 A 1\n  All Trs  -  Cl 9 F 1\n\nObs\n  Broken Gr. Complete obs for wh vehs, however, impedes mov of tr vehs.\n  Disty No 5. Not an obs for wh and tr vehs however impedes mov.\n  Kot Bahadur Minor (E flank). Obs for wh and tr vehs; crossing only at brs.\n  Dry Nullah. Not an obs for wh and tr vehs however impedes mov.\n  BUAs. Area is densely populated. The vills / towns are loc gen on the higher gr than surroundings. Jaleel Abad is med size town with double storied houses.\n\nCover. Cover is aval in the form of scattered trees, clumps, relative hts and BUAs.' },
       { key: 'narr1', title: 'Narr 1', body: 'CO (depicted by syn Instr) turned towards Coy Comd A Coy, Capt Hasnain, and said, “I have given you the most difficult and complex task of def lt side of my Bn. As per my vis en will attk your coy loc with a bn size force sp by a tp of tks. You are at full liberty to sel and suggest to me suitable lines of def within given bdrys. Plan your defs in such a manner that it should prevent, resist, repulse and destroy en attk. 1 x Intg QC Det (5 x pers having 1 surv x QC & 1 x A/QC), 2 x BS dets & Sec aslt pnr are placed UC whereas Arty & Mor Obsrs are placed UC forthwith. Moreover, UCAV strike would also be aval on justified demand.\n\nYou must sel and suggest loc for Bn Screens and lve enough space for their emp as the resources do not warrant emp of any other protective dets while ensuring def to be as far fwd as tac feasible. B Coy will conform to the def line sel by you as FDLs. Your defs should be ready in all aspects by first lt D Day.”' },
     ],
     requirements: [
@@ -161,10 +373,11 @@ export function presetBic49(): Scenario {
       boundaries: [
         { pts: gp([[14, 64], [14, 81.3]]), label: '105 ✕ 250', echelon: 'BDE' },
         { pts: gp([[19, 64], [19, 81.35]]), label: 'A | B', echelon: 'COY' },
+        { pts: gp([[24, 64], [24, 81.3]]), label: '139 | 146', echelon: 'BN' },
       ],
       flanks: [
         { side: 'L', name: '105 Bde (inter bde bdry)' },
-        { side: 'R', name: 'B Coy 139 Baloch' },
+        { side: 'R', name: 'B Coy 139 Baloch (Rt fwd); 146 Punjab beyond the Bn rt bdry' },
       ],
       resources: [
         { templateKey: 'RIFLE_PL', count: 3, status: 'ORGANIC', note: 'Nos 1, 2 & 3 Pls' },
@@ -272,4 +485,6 @@ export function presetBic49(): Scenario {
       ],
     },
   };
+  // author in the sketch frame, publish in the map frame (eastings 03-30)
+  return translateScenario(sketch, SKETCH_SHIFT);
 }

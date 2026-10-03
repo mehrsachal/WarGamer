@@ -17,7 +17,8 @@ export function scenarioThumb(s: Scenario, w = 420, h = 230): string {
   r.layers.labels = false;
   r.layers.aor = false;
   r.layers.decor = false;
-  r.fit(aorBox(s, 300), 0, true);
+  // AOR with its flanks, framed as a landscape preview (the view is clamped to fill the card)
+  r.fit(aorBox(s, 300), 0, false);
   r.scene = { units: [], graphics: [] };
   r.draw();
   const url = canvas.toDataURL('image/jpeg', 0.82);

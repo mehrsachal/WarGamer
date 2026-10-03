@@ -67,6 +67,12 @@ export interface TerrainData {
   gridOrigin: { e: number; n: number };
   features: Feature[];
   type: TerrainType;
+  /**
+   * Frame of the procedural micro-relief (undulation and dune noise): seed and the world point
+   * used as its origin. Absent = derived from the extent at origin (0,0). A preset whose sheet was
+   * widened keeps its old frame here so the original ground (and the wargame balance) is unchanged.
+   */
+  noise?: { seed: string; origin: Vec };
 }
 
 // ---------------------------------------------------------------- scenario
@@ -158,6 +164,8 @@ export interface Scenario {
   source: 'preset' | 'generated' | 'custom';
   seed: number;
   createdAt: number;
+  /** Geometry version of a preset (bumped when its map frame changes; attempts made on an older version are migrated). */
+  version?: number;
   terrain: TerrainData;
   narrative: NarrativeSection[];
   requirements: string[];
@@ -498,6 +506,8 @@ export interface Attempt {
   exerciseId: string;
   studentId: string;
   scenarioId: string;
+  /** Scenario.version the plan coordinates refer to (absent = version 1 / unversioned). */
+  scenarioVersion?: number;
   status: 'PLANNING' | 'SUBMITTED' | 'COMPLETE';
   plan: Plan;
   startedAt: number;

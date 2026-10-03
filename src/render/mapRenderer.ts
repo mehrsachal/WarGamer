@@ -119,6 +119,8 @@ export class MapRenderer {
   scale = 0.1;
   cx = 0;
   cy = 0;
+  /** Keep a framed view inside the sheet (see clampView). */
+  bounded = true;
   layers: Layers = { grid: true, labels: true, aor: true, arcs: true, graphics: true, relief: true, decor: true };
   scene: MapScene = { units: [], graphics: [] };
   private base: HTMLCanvasElement | null = null;
@@ -154,6 +156,31 @@ export class MapRenderer {
     this.scale = cover ? Math.max(sx, sy) : Math.min(sx, sy);
     this.cx = (b.minX + b.maxX) / 2;
     this.cy = (b.minY + b.maxY) / 2;
+    this.clampView();
+  }
+
+  /**
+   * A framed map view (terrain drawn) always fills its panel: never zoomed out beyond the sheet and
+   * never panned past its edges, so no empty strips show. Transparent overlays (layers.terrain ===
+   * false, e.g. for draping on 3D terrain) and renderers with `bounded = false` (e.g. offscreen
+   * textures of the whole sheet) are left exactly as set.
+   */
+  clampView(): void {
+    if (!this.bounded || this.layers.terrain === false || this.w <= 0 || this.h <= 0) return;
+    const W = this.s.terrain.width;
+    const H = this.s.terrain.height;
+    this.scale = Math.max(this.scale, this.minScale());
+    const hw = this.w / 2 / this.scale;
+    const hh = this.h / 2 / this.scale;
+    this.cx = W >= hw * 2 ? Math.max(hw, Math.min(W - hw, this.cx)) : W / 2;
+    this.cy = H >= hh * 2 ? Math.max(hh, Math.min(H - hh, this.cy)) : H / 2;
+  }
+
+  /** Smallest zoom: the sheet just covers the view (framed views) or half of contain (overlays). */
+  private minScale(): number {
+    const W = this.s.terrain.width;
+    const H = this.s.terrain.height;
+    return !this.bounded || this.layers.terrain === false ? Math.min(this.w / W, this.h / H) * 0.5 : Math.max(this.w / W, this.h / H);
   }
 
   toScreen(p: Vec): Vec {
@@ -165,15 +192,16 @@ export class MapRenderer {
   zoomAt(sx: number, sy: number, factor: number): void {
     const before = this.toWorld(sx, sy);
     const maxScale = 2.5;
-    const minScale = Math.min(this.w / this.s.terrain.width, this.h / this.s.terrain.height) * 0.5;
-    this.scale = Math.max(minScale, Math.min(maxScale, this.scale * factor));
+    this.scale = Math.max(this.minScale(), Math.min(maxScale, this.scale * factor));
     const after = this.toWorld(sx, sy);
     this.cx += before.x - after.x;
     this.cy += before.y - after.y;
+    this.clampView();
   }
   panBy(dx: number, dy: number): void {
     this.cx -= dx / this.scale;
     this.cy += dy / this.scale;
+    this.clampView();
   }
   /** Pixels for a length in metres, clamped for legibility. */
   private px(m: number, lo = 0, hi = 9999): number {
@@ -224,6 +252,8 @@ export class MapRenderer {
     const sc = this.scene;
     const night = !!sc.night;
     const terrain = this.layers.terrain !== false;
+    // views restored after a resize (or set directly) are brought back inside the sheet
+    this.clampView();
     g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     const tl = this.toScreen({ x: 0, y: this.s.terrain.height });
     const br = this.toScreen({ x: this.s.terrain.width, y: 0 });
@@ -529,8 +559,8 @@ export class MapRenderer {
         case 'disty':
         case 'canal':
         case 'river': {
-          const L = polylineLength(f.pts);
-          p = pointAlong(f.pts, L * 0.18);
+          // along the part of the line that is on screen (the sheet is wider than most views)
+          p = this.alongInView(f.pts, 0.18);
           dy = -11;
           break;
         }
@@ -564,11 +594,29 @@ export class MapRenderer {
     // country names
     const border = this.s.terrain.features.find((f) => f.kind === 'border');
     if (border && border.kind === 'border') {
-      const top = this.toScreen({ x: this.s.terrain.width * 0.08, y: Math.min(this.s.terrain.height - 80, border.pts[0].y + 250) });
-      const bot = this.toScreen({ x: this.s.terrain.width * 0.08, y: border.pts[0].y - 250 });
+      // country names near the left of the visible part of the sheet (it is wider than the view)
+      const lx = Math.max(this.s.terrain.width * 0.02, this.toWorld(64, 0).x);
+      const top = this.toScreen({ x: lx, y: Math.min(this.s.terrain.height - 80, border.pts[0].y + 250) });
+      const bot = this.toScreen({ x: lx, y: border.pts[0].y - 250 });
       this.halo('FOXLAND', top.x, top.y, fs + 2, '#b71c1c', 'left', 800, hal);
       this.halo('BLUELAND', bot.x, bot.y, fs + 2, '#0d47a1', 'left', 800, hal);
     }
+  }
+
+  /** Point at `frac` of the on-screen stretch of a polyline (null when it is off screen). */
+  private alongInView(pts: Vec[], frac: number): Vec | null {
+    const L = polylineLength(pts);
+    const step = Math.max(20, 8 / this.scale);
+    let first = -1;
+    let last = -1;
+    for (let d = 0; d <= L; d += step) {
+      const q = this.toScreen(pointAlong(pts, d));
+      if (q.x > 40 && q.x < this.w - 40 && q.y > 30 && q.y < this.h - 30) {
+        if (first < 0) first = d;
+        last = d;
+      }
+    }
+    return first < 0 ? null : pointAlong(pts, first + (last - first) * frac);
   }
 
   private hatch(poly: Vec[], color: string, style: 'grass' | 'dunes' | 'broken' | 'marsh' | 'bua'): void {

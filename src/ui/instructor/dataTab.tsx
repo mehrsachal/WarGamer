@@ -3,6 +3,7 @@ import type { AppSettings } from '../../core/types';
 import { hashSecret } from '../../store/auth';
 import { type Bundle, db, dbKind, downloadJson, exportBundle, importBundle, pickJsonFile } from '../../store/db';
 import { Field, toast } from '../kit';
+import { ensureSeed } from '../data';
 import type { Db } from './home';
 
 export function DataTab(p: { d: Db; reload: () => void; settings: AppSettings; onSettings: (s: AppSettings) => void }) {
@@ -16,6 +17,7 @@ export function DataTab(p: { d: Db; reload: () => void; settings: AppSettings; o
     try {
       const b = (await pickJsonFile()) as Bundle;
       const counts = await importBundle(b, { overwriteSettings: false });
+      await ensureSeed(); // migrate imported work made on an older preset map frame
       toast(`Imported: ${Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(', ') || 'nothing new'}.`, 'ok');
       p.reload();
     } catch (e) {

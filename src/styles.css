@@ -319,6 +319,11 @@ label.field.why { margin-top: 8px; }
 .tbl.decisions .fbl { line-height: 1.35; margin-bottom: 2px; }
 .tbl.decisions .fbl.good { color: #a5d6a7; } .tbl.decisions .fbl.gap { color: #ffcc80; }
 .tbl.decisions tr.unmarked td { opacity: 0.6; }
+.tbl.decisions { table-layout: fixed; }
+.tbl.decisions th:nth-child(1) { width: 72px; } .tbl.decisions th:nth-child(2) { width: 150px; }
+.tbl.decisions th:nth-child(4) { width: 132px; } .tbl.decisions th:nth-child(5) { width: 36%; }
+.tbl.decisions td { vertical-align: top; overflow-wrap: break-word; }
+.tbl.decisions .chip { white-space: normal; max-width: 100%; text-align: left; }
 
 /* instructor marking settings */
 .marking .field-l { font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
@@ -328,6 +333,6 @@ label.field.why { margin-top: 8px; }
 .gw { display: grid; grid-template-columns: minmax(0, 1fr) 90px 40px; align-items: center; gap: 6px; }
 .gw input[type=range] { width: 100%; accent-color: var(--accent); }
 .item-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 14px; margin-top: 8px; max-height: 320px; overflow: auto; padding: 8px; background: #141b21; border: 1px solid var(--line); border-radius: 8px; }
-.item-col h4 { margin: 6px 0 2px; }
+.item-col h4 { margin: 6px 0 2px; position: sticky; top: -8px; z-index: 1; background: #141b21; padding: 4px 0; }
 .item-col .check { padding: 2px 4px; }
 @media print { .ovr, .mapdec { display: none !important; } .band { border-color: #999; color: #000; background: none; } }

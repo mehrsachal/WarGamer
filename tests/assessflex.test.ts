@@ -124,6 +124,13 @@ test('contingency combinations: best > partial > conflicting; several sound sets
   }
 });
 
+test('feedback never suggests a contradicting or merely partly sound action; caveats are gaps', () => {
+  const v = evaluateResponse('SCREEN_CONTACT', { actions: ['ENGAGE_LONG', 'WD_ON_ORDER'] }, {});
+  assert.ok(!v.gaps!.some((g) => /Withdraw the screens to the main posn immediately/i.test(g)), v.gaps!.join(' | '));
+  const w = evaluateResponse('SCREEN_CONTACT', { actions: ['WITHDRAW_NOW'] }, {});
+  assert.ok(w.score > 0 && w.gaps!.some((g) => /close obsn/.test(g)) && !w.strengths!.some((g) => /close obsn/.test(g)));
+});
+
 test('free text: understood as actions, negations respected, modest bonus, never a penalty', () => {
   assert.deepEqual(inferActions('Do not withdraw; hold fast and call DF on the FUP').sort(), ['DF_FUP', 'HOLD_FAST']);
   const acts = ['SOS', 'HOLD_FIRE_KA'];

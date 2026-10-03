@@ -68,7 +68,7 @@ export function Contingencies(p: StepProps) {
                       <span class="dim small">Start from:</span>
                       {d.options.map((o) => (
                         <button class="btn small ghost" title={o.text} onClick={() => set(d.key, (x) => setChoiceActions(d.key, x, d.legacy[o.id] ?? []))}>
-                          {o.text.split(/[;,(]/)[0].slice(0, 46)}
+                          {quickLabel(d.options.map((x) => x.text), o.text)}
                         </button>
                       ))}
                     </div>
@@ -199,4 +199,14 @@ export function Contingencies(p: StepProps) {
       </div>
     </div>
   );
+}
+
+/** Short, distinct label of a quick pick: its first clause, extended while it is ambiguous. */
+function quickLabel(all: string[], text: string): string {
+  const segs = text.split(/;\s*/);
+  let l = segs[0];
+  for (let i = 1; i < segs.length && all.some((t) => t !== text && t.startsWith(l)); i++) l = `${l}; ${segs[i]}`;
+  if (l.length <= 58) return l;
+  const cut = l.slice(0, 56);
+  return `${cut.slice(0, Math.max(30, cut.lastIndexOf(' ')))}…`;
 }

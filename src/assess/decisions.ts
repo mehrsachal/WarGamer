@@ -84,6 +84,10 @@ interface Spec {
   refs?: Record<string, string>;
 }
 
+/** A partly sound action: credited, but its caveat is shown as a gap, not a strength. */
+const mixed = (v: number, caveat: string): Val => Object.assign((): [number, string] => [v, caveat], { mixed: true });
+const isMixed = (v: Val | undefined) => typeof v === 'function' && 'mixed' in v;
+
 const catkTf = (c: DecisionContext) => {
   const delay = c.delay ?? 15;
   return delay <= DOCTRINE.coyCatkIdealMin ? 1 : delay <= DOCTRINE.coyCatkMaxMin ? 0.85 : delay <= 45 ? 0.5 : 0.3;
@@ -91,7 +95,7 @@ const catkTf = (c: DecisionContext) => {
 
 const SPECS: Record<string, Spec> = {
   SCREEN_CONTACT: {
-    values: { ENGAGE_LONG: 0.35, DF_SCREEN: 0.2, WD_ON_ORDER: 0.3, REPORT: 0.1, STAND_TO: 0.05, CLOSE_LANES: 0.1, WITHDRAW_NOW: 0.3, HOLD_ALL_COSTS: -0.6, REINFORCE_SCREEN: -0.4 },
+    values: { ENGAGE_LONG: 0.35, DF_SCREEN: 0.2, WD_ON_ORDER: 0.3, REPORT: 0.1, STAND_TO: 0.05, CLOSE_LANES: 0.1, WITHDRAW_NOW: mixed(0.3, 'Withdrawing on first contact saves the screens but gives the en early, close obsn of the main posn without forcing him to deploy.'), HOLD_ALL_COSTS: -0.6, REINFORCE_SCREEN: -0.4 },
     why: {
       ENGAGE_LONG: 'Screens engage at long rg and force the en to deploy early.',
       DF_SCREEN: 'Arty / mor in sp of the screens adds delay and cas.',
@@ -112,7 +116,7 @@ const SPECS: Record<string, Spec> = {
     refs: { ENGAGE_LONG: REF.SCREEN_WITHDRAWAL, WD_ON_ORDER: REF.SCREEN_WITHDRAWAL, WITHDRAW_NOW: REF.SCREENS, REINFORCE_SCREEN: REF.SCREENS },
   },
   EN_PROBE: {
-    values: { MIN_WPNS: 0.45, AGGR_PTL: 0.2, CAM_DISC: 0.2, CHECK_OBS: 0.1, REPORT: 0.1, ALL_WPNS: -0.3, DF_TGT: -0.15, HOLD_FIRE: 0.3 },
+    values: { MIN_WPNS: 0.45, AGGR_PTL: 0.2, CAM_DISC: 0.2, CHECK_OBS: 0.1, REPORT: 0.1, ALL_WPNS: -0.3, DF_TGT: -0.15, HOLD_FIRE: mixed(0.3, 'Letting the ptl go unchallenged keeps the wpns hidden but allows it to locate gaps and lanes.') },
     why: {
       MIN_WPNS: 'Probing is frustrated firmly with minimum firepower from altn posns; the main wpns stay hidden.',
       AGGR_PTL: 'Aggressive ptls intercept the en ptl.',
@@ -227,7 +231,7 @@ const SPECS: Record<string, Spec> = {
               ? [0.3 * catkTf(c), 'C attk ordered with a sub-unit already committed to holding gr — the depth sub-unit should be used.']
               : 0.55 * catkTf(c),
       REINFORCE_LOC: (c) => (c.depthAvailable === false ? 0.35 : 0.25),
-      CPEN: 0.2,
+      CPEN: mixed(0.2, 'C pen posns occupied — it limits the penetration, but is premature at the loss of a sec.'),
       REQ_HIGHER_CATK: (c) => ((c.elementsLost ?? 1) > 2 ? 0.3 : 0.05),
       DF_PEN: 0.15,
       FIRE_SP_ADJ: 0.1,
@@ -547,8 +551,10 @@ export function evaluateResponse(key: string, r: ResponseInput, ctx: DecisionCon
     }
   }
   // what a fuller answer would have included
+  // (never suggest an action that would contradict what was chosen, or a merely partly sound one)
+  const clashes = (a: string) => (spec.conflicts ?? []).some((c) => (c.a.includes(a) && c.b.some((b) => sel.has(b))) || (c.b.includes(a) && c.a.some((x) => sel.has(x))));
   const missing = Object.keys(spec.values)
-    .filter((a) => !sel.has(a))
+    .filter((a) => !sel.has(a) && !clashes(a) && !isMixed(spec.values[a]))
     .map((a) => ({ a, v: valOf(spec.values[a], ctx)[0] }))
     .filter((x) => x.v >= 0.15)
     .sort((x, y) => y.v - x.v)

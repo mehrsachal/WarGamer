@@ -201,3 +201,13 @@ export function round(n: number, dp = 0): number {
   const k = 10 ** dp;
   return Math.round(n * k) / k;
 }
+
+/** Translate a point by d (returns a new point). */
+export function translateVec(p: Vec, d: Vec): Vec {
+  return { x: p.x + d.x, y: p.y + d.y };
+}
+
+/** Translate every point of a polyline / polygon by d (returns new points). */
+export function translatePts(pts: Vec[], d: Vec): Vec[] {
+  return pts.map((p) => translateVec(p, d));
+}

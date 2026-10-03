@@ -7,7 +7,6 @@ import {
   centroid,
   clamp,
   dist,
-  distToPolyline,
   ellipseNormDist,
   pointInPolygon,
   bbox,
@@ -47,6 +46,9 @@ export class TerrainModel {
   readonly road: Uint8Array;
   readonly places: NamedPlace[];
   private wet: boolean;
+  /** Origin of the micro-relief noise frame (TerrainData.noise). */
+  private nx = 0;
+  private ny = 0;
 
   constructor(data: TerrainData, opts: { wet?: boolean } = {}) {
     this.data = data;
@@ -87,7 +89,10 @@ export class TerrainModel {
 
   // ------------------------------------------------------------ build
   private build(): void {
-    const rng = new Rng(`terrain-${this.data.width}-${this.data.height}-${this.data.features.length}`);
+    const nz = this.data.noise;
+    const rng = new Rng(nz?.seed ?? `terrain-${this.data.width}-${this.data.height}-${this.data.features.length}`);
+    this.nx = nz?.origin.x ?? 0;
+    this.ny = nz?.origin.y ?? 0;
     const { cols, rows } = this;
     // gentle undulation of the plains (+-1 m), more for desert
     const amp = this.data.type === 'DESERT' ? 4 : this.data.type === 'SEMI_DESERT' ? 2.5 : 0.8;
@@ -101,7 +106,7 @@ export class TerrainModel {
       for (let c = 0; c < cols; c++) {
         const p = this.centerOf(c, r);
         let e = 0;
-        for (const w of waves) e += w.a * Math.sin(p.x * w.kx + p.y * w.ky + w.ph);
+        for (const w of waves) e += w.a * Math.sin((p.x - this.nx) * w.kx + (p.y - this.ny) * w.ky + w.ph);
         this.elev[this.idx(c, r)] = (e / waves.length) * amp;
       }
     }
@@ -154,17 +159,32 @@ export class TerrainModel {
 
   private stampLine(pts: Vec[], halfWidth: number, fn: (i: number, d: number) => void): void {
     if (pts.length < 2) return;
-    const b = bbox(pts);
-    const pad = halfWidth + this.cell;
-    const [c0, r0] = this.cellOf({ x: b.minX - pad, y: b.minY - pad });
-    const [c1, r1] = this.cellOf({ x: b.maxX + pad, y: b.maxY + pad });
+    // Per-segment bounding boxes (long diagonal lines on wide maps would otherwise scan huge
+    // rectangles); each cell gets fn once with its distance to the whole polyline.
     const reach = halfWidth + this.cell * 0.72;
-    for (let r = r0; r <= r1; r++) {
-      for (let c = c0; c <= c1; c++) {
-        const d = distToPolyline(this.centerOf(c, r), pts).d;
-        if (d <= reach) fn(this.idx(c, r), d);
+    const best = new Map<number, number>();
+    for (let s = 1; s < pts.length; s++) {
+      const a = pts[s - 1];
+      const b = pts[s];
+      const [c0, r0] = this.cellOf({ x: Math.min(a.x, b.x) - reach, y: Math.min(a.y, b.y) - reach });
+      const [c1, r1] = this.cellOf({ x: Math.max(a.x, b.x) + reach, y: Math.max(a.y, b.y) + reach });
+      const abx = b.x - a.x;
+      const aby = b.y - a.y;
+      const l2 = abx * abx + aby * aby;
+      for (let r = r0; r <= r1; r++) {
+        const py = (r + 0.5) * this.cell;
+        for (let c = c0; c <= c1; c++) {
+          const px = (c + 0.5) * this.cell;
+          const t = l2 > 0 ? clamp(((px - a.x) * abx + (py - a.y) * aby) / l2, 0, 1) : 0;
+          const d = Math.hypot(px - (a.x + abx * t), py - (a.y + aby * t));
+          if (d > reach) continue;
+          const i = r * this.cols + c;
+          const prev = best.get(i);
+          if (prev === undefined || d < prev) best.set(i, d);
+        }
       }
     }
+    for (const [i, d] of best) fn(i, d);
   }
 
   private rasterFeature(f: Feature): void {
@@ -221,7 +241,7 @@ export class TerrainModel {
         break;
       case 'dunes':
         this.stampPoly(f.poly, (i, p) => {
-          this.elev[i] += 3 + 3 * Math.sin(p.x * 0.02) * Math.cos(p.y * 0.017);
+          this.elev[i] += 3 + 3 * Math.sin((p.x - this.nx) * 0.02) * Math.cos((p.y - this.ny) * 0.017);
           this.cover[i] = Math.max(this.cover[i], 0.3);
           this.conceal[i] = Math.max(this.conceal[i], 0.3);
           this.goFoot[i] = Math.min(this.goFoot[i], 0.65);
@@ -452,7 +472,7 @@ export class TerrainModel {
    * enemy to prefer covered routes and by own C attk forces to come in from a flank).
    */
   findPath(from: Vec, to: Vec, mode: MoveMode, opts: { avoid?: { pos: Vec; r: number; w: number }[]; preferCover?: number; coarse?: number } = {}): Vec[] {
-    const k = opts.coarse ?? (this.cols * this.rows > 90000 ? 2 : 1);
+    const k = opts.coarse ?? (this.cols * this.rows > 240000 ? 2 : 1);
     const cs = this.cell * k;
     const cols = Math.ceil(this.cols / k);
     const rows = Math.ceil(this.rows / k);
@@ -645,7 +665,8 @@ class MinHeap {
 // Cache terrain models by scenario id (building the raster takes a moment on big maps).
 const cache = new Map<string, TerrainModel>();
 export function terrainFor(key: string, data: TerrainData, wet = false): TerrainModel {
-  const k = `${key}:${wet ? 'w' : 'd'}`;
+  // the extent is part of the key so a re-framed scenario (same id, new version) never reuses a stale raster
+  const k = `${key}:${data.width}x${data.height}:${data.features.length}:${wet ? 'w' : 'd'}`;
   let t = cache.get(k);
   if (!t) {
     t = new TerrainModel(data, { wet });

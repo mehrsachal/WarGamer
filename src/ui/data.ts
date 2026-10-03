@@ -2,7 +2,8 @@
 import { uid } from '../core/rng';
 import type { Attempt, Exercise, ExerciseSettings, Scenario } from '../core/types';
 import { emptyPlan } from '../plan/plan';
-import { generateScenario } from '../scenario/generator';
+import { type GenOptions, generateScenario } from '../scenario/generator';
+import { migrateAttempt } from '../scenario/migrate';
 import { presetBic49 } from '../scenario/presetBic49';
 import { db } from '../store/db';
 
@@ -16,13 +17,42 @@ export const DEFAULT_SETTINGS: ExerciseSettings = {
   timeLimitMin: 0,
 };
 
+/** Sample generated scenarios seeded into an empty store. */
+const SAMPLES: GenOptions[] = [
+  { level: 'PL', terrain: 'PLAINS', seed: 1101, title: 'Pl Def — Plains (sample)' },
+  { level: 'COY', terrain: 'CANAL', seed: 2202, title: 'Coy Def — Canal (sample)' },
+  { level: 'BN', terrain: 'SEMI_DESERT', seed: 3303, title: 'Bn Def — Semi-desert (sample)' },
+];
+
 export async function ensureSeed(): Promise<void> {
   const sc = await db.all('scenarios');
-  if (!sc.some((s) => s.id === 'preset_bic49_te_def')) await db.put('scenarios', presetBic49());
+  const preset = presetBic49();
+  // Saved work on an older map frame of the preset is translated onto the current one. Keyed on
+  // each attempt's own scenarioVersion, so it is idempotent and also catches imported old attempts.
+  const attempts = await db.all('attempts');
+  for (const a of attempts) {
+    const m = migrateAttempt(a, preset);
+    if (m) await db.put('attempts', m);
+  }
+  const stored = sc.find((s) => s.id === preset.id);
+  if (!stored || stored.version !== preset.version) {
+    await db.put('scenarios', preset);
+    forgetScenario(preset.id);
+  }
   if (sc.length === 0) {
-    await db.put('scenarios', generateScenario({ level: 'PL', terrain: 'PLAINS', seed: 1101, title: 'Pl Def — Plains (sample)' }));
-    await db.put('scenarios', generateScenario({ level: 'COY', terrain: 'CANAL', seed: 2202, title: 'Coy Def — Canal (sample)' }));
-    await db.put('scenarios', generateScenario({ level: 'BN', terrain: 'SEMI_DESERT', seed: 3303, title: 'Bn Def — Semi-desert (sample)' }));
+    for (const o of SAMPLES) await db.put('scenarios', generateScenario(o));
+    return;
+  }
+  // v1 samples were portrait strips: regenerate them as landscape sheets if nobody has used them yet
+  const exercises = await db.all('exercises');
+  const used = new Set([...attempts.map((a) => a.scenarioId), ...exercises.map((e) => e.scenarioId)]);
+  for (const o of SAMPLES) {
+    const old = sc.find((s) => s.source === 'generated' && s.seed === o.seed && s.title === o.title);
+    if (old && old.terrain.height > old.terrain.width && !used.has(old.id)) {
+      const fresh = generateScenario(o);
+      await db.put('scenarios', { ...fresh, id: old.id, createdAt: old.createdAt });
+      forgetScenario(old.id);
+    }
   }
 }
 
@@ -46,7 +76,8 @@ export async function attemptFor(exercise: Exercise, studentId: string): Promise
 }
 
 export async function startAttempt(exerciseId: string, scenarioId: string, studentId: string): Promise<Attempt> {
-  const a: Attempt = { id: uid('att'), exerciseId, studentId, scenarioId, status: 'PLANNING', plan: emptyPlan(), startedAt: Date.now() };
+  const scenarioVersion = (await getScenario(scenarioId))?.version;
+  const a: Attempt = { id: uid('att'), exerciseId, studentId, scenarioId, scenarioVersion, status: 'PLANNING', plan: emptyPlan(), startedAt: Date.now() };
   await db.put('attempts', a);
   return a;
 }

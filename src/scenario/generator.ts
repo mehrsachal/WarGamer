@@ -41,13 +41,19 @@ interface LevelCfg {
   villages: number;
   heights: number;
   k: number;
+  /** Map area relative to the v1 portrait strips: scales the counts of scattered features. */
+  fill: number;
 }
 
+/**
+ * Landscape map sheets (aspect ~1.4-1.5) with the AOR in the centre and the flank formations'
+ * ground either side, so every map view fills its panel.
+ */
 const LEVELS: Record<OpsLevel, LevelCfg> = {
-  PL: { W: 3000, H: 5000, cell: 20, gridSq: 500, aorW: 1000, aorDepth: 3000, villages: 7, heights: 6, k: 0.6 },
-  COY: { W: 4500, H: 9500, cell: 25, gridSq: 500, aorW: 2500, aorDepth: 6500, villages: 15, heights: 10, k: 1 },
-  BN: { W: 10000, H: 16000, cell: 50, gridSq: 1000, aorW: 5500, aorDepth: 10500, villages: 26, heights: 16, k: 2 },
-  BDE: { W: 20000, H: 28000, cell: 100, gridSq: 1000, aorW: 12000, aorDepth: 19000, villages: 40, heights: 24, k: 3.5 },
+  PL: { W: 7500, H: 5000, cell: 20, gridSq: 500, aorW: 1000, aorDepth: 3000, villages: 17, heights: 14, k: 0.6, fill: 2.5 },
+  COY: { W: 13500, H: 9500, cell: 25, gridSq: 500, aorW: 2500, aorDepth: 6500, villages: 40, heights: 28, k: 1, fill: 3 },
+  BN: { W: 24000, H: 16000, cell: 50, gridSq: 1000, aorW: 5500, aorDepth: 10500, villages: 62, heights: 38, k: 2, fill: 2.4 },
+  BDE: { W: 42000, H: 28000, cell: 100, gridSq: 1000, aorW: 12000, aorDepth: 19000, villages: 84, heights: 50, k: 3.5, fill: 2.1 },
 };
 
 export const LEVEL_NAMES: Record<OpsLevel, string> = {
@@ -68,7 +74,7 @@ export function generateScenario(opts: GenOptions): Scenario {
   const seed = opts.seed ?? newSeed();
   const rng = new Rng(seed);
   const cfg = LEVELS[opts.level];
-  const { W, H, k } = cfg;
+  const { W, H, k, fill } = cfg;
   const type = opts.terrain;
   const feats: Feature[] = [];
   let fid = 0;
@@ -78,7 +84,8 @@ export function generateScenario(opts: GenOptions): Scenario {
   // ------------------------------------------------------------------ border
   const borderY = H * 0.86;
   const border: Vec[] = [];
-  for (let x = 0; x <= W; x += W / 8) border.push({ x, y: borderY + rng.range(-40, 40) * k });
+  const nBorder = Math.round((12 * W) / H);
+  for (let i = 0; i <= nBorder; i++) border.push({ x: (W * i) / nBorder, y: borderY + rng.range(-40, 40) * k });
   feats.push({ id: id(), kind: 'border', name: 'Interstate Bdry', pts: border });
 
   // ------------------------------------------------------------------ AOR
@@ -114,12 +121,16 @@ export function generateScenario(opts: GenOptions): Scenario {
 
   // ------------------------------------------------------------------ roads
   const roads: LinearFeature[] = [];
-  const nMain = type === 'DESERT' ? 1 : rng.chance(0.6) ? 2 : 1;
+  // main N-S roads spread across the sheet in bands; one always runs through the AOR
+  const nMain = type === 'DESERT' ? 2 : rng.chance(0.5) ? 4 : 3;
+  const bandW = W / nMain;
+  const aorBand = Math.min(nMain - 1, Math.floor(aorCx / bandW));
   for (let r = 0; r < nMain; r++) {
-    const x0 = W * (nMain === 1 ? rng.range(0.3, 0.7) : r === 0 ? rng.range(0.15, 0.4) : rng.range(0.6, 0.85));
-    const x1 = x0 + rng.range(-0.15, 0.15) * W;
+    let x0 = bandW * (r + rng.range(0.25, 0.75));
+    if (r === aorBand) x0 = rng.range(ax0 + (ax1 - ax0) * 0.2, ax1 - (ax1 - ax0) * 0.2);
+    const x1 = x0 + rng.range(-0.3, 0.3) * bandW;
     const way: Vec[] = [{ x: x0, y: H }];
-    const along = villages.filter((v) => Math.abs(v.c.x - (x0 + (x1 - x0) * (1 - v.c.y / H))) < W * 0.12).sort((a, b) => b.c.y - a.c.y);
+    const along = villages.filter((v) => Math.abs(v.c.x - (x0 + (x1 - x0) * (1 - v.c.y / H))) < bandW * 0.32).sort((a, b) => b.c.y - a.c.y);
     for (const v of along) way.push({ x: v.c.x, y: v.c.y });
     way.push({ x: x1, y: 0 });
     const pts = smooth(way, 2);
@@ -157,7 +168,8 @@ export function generateScenario(opts: GenOptions): Scenario {
   const waters: LinearFeature[] = [];
   const wavy = (y: number, amp: number): Vec[] => {
     const pts: Vec[] = [];
-    for (let x = 0; x <= W + 1; x += W / 10) pts.push({ x, y: y + rng.range(-amp, amp) });
+    const n = Math.round((16 * W) / H);
+    for (let i = 0; i <= n; i++) pts.push({ x: (W * i) / n, y: y + rng.range(-amp, amp) });
     return smooth(pts, 2);
   };
   if (type === 'CANAL') {
@@ -198,13 +210,14 @@ export function generateScenario(opts: GenOptions): Scenario {
     if (feats.some((f) => f.kind === 'height' && dist(f.c, c) < 700 * k)) continue;
     if (waters.some((w) => w.pts.some((p) => dist(p, c) < 150 * k))) continue;
     let h = type === 'DESERT' ? rng.int(8, 30) : type === 'SEMI_DESERT' ? rng.int(5, 22) : rng.int(4, 20);
-    let name = `${h} r`;
+    let name: string | undefined = `${h} r`;
     if (hNames.has(name)) {
       h += 1;
       name = `${h} r`;
     }
-    if (hNames.has(name)) continue;
-    hNames.add(name);
+    // names are unique on a sheet; extra rises are left unnamed (as on the sketches)
+    if (hNames.has(name)) name = undefined;
+    else hNames.add(name);
     const raised = type !== 'DESERT' && made === 2;
     feats.push({ id: id(), kind: 'height', name: raised ? 'Raised Gr' : name, c, rx: rng.range(160, 330) * Math.max(1, k * 0.7), ry: rng.range(45, 90) * Math.max(1, k * 0.7), rot: rng.range(-15, 15), h: raised ? 6 : h });
     made++;
@@ -212,7 +225,7 @@ export function generateScenario(opts: GenOptions): Scenario {
 
   // ------------------------------------------------------------------ vegetation, broken gr, bunds, dunes
   let clump = 0;
-  const nTrees = Math.round((type === 'DESERT' ? 3 : 9) * Math.max(1, k * 0.8));
+  const nTrees = Math.round((type === 'DESERT' ? 3 : 9) * Math.max(1, k * 0.8) * fill);
   for (let i = 0; i < nTrees; i++) {
     const c = { x: rng.range(0.05, 0.95) * W, y: rng.range(0.05, 0.95) * H };
     if (feats.some((f) => f.kind === 'bua' && dist(centroid(f.poly), c) < 200)) continue;
@@ -220,25 +233,28 @@ export function generateScenario(opts: GenOptions): Scenario {
     feats.push({ id: id(), kind: 'trees', name: named ? `Clump ${++clump}` : undefined, poly: ellipsePoly(c, rng.range(80, 180) * Math.max(1, k * 0.6), rng.range(70, 160) * Math.max(1, k * 0.6), rng.range(0, 90), 12) });
   }
   if (type !== 'DESERT') {
-    for (let i = 0; i < Math.round(2 * Math.max(1, k * 0.6)); i++) {
-      const c = { x: rng.range(0.1, 0.9) * W, y: rng.range(0.15, 0.85) * H };
+    for (let i = 0; i < Math.round(2 * Math.max(1, k * 0.6) * fill); i++) {
+      const c = { x: rng.range(0.04, 0.96) * W, y: rng.range(0.15, 0.85) * H };
       feats.push({ id: id(), kind: 'grass', name: 'Tall Grass', poly: ellipsePoly(c, rng.range(150, 350) * k, rng.range(100, 220) * k, rng.range(0, 90), 12) });
     }
   }
-  for (let i = 0; i < Math.round((type === 'DESERT' ? 1 : 2) * Math.max(1, k * 0.6)); i++) {
-    const c = { x: rng.range(0.1, 0.9) * W, y: rng.range(0.1, 0.9) * H };
+  for (let i = 0; i < Math.round((type === 'DESERT' ? 1 : 2) * Math.max(1, k * 0.6) * fill); i++) {
+    const c = { x: rng.range(0.04, 0.96) * W, y: rng.range(0.1, 0.9) * H };
     feats.push({ id: id(), kind: 'broken', name: 'Broken Gr', poly: ellipsePoly(c, rng.range(150, 300) * k, rng.range(120, 220) * k, rng.range(0, 90), 10) });
   }
-  if (type === 'CANAL' && rng.chance(0.5)) {
-    const c = { x: rng.range(0.15, 0.85) * W, y: rng.range(0.15, 0.6) * H };
-    feats.push({ id: id(), kind: 'marsh', name: 'Marshy Area', poly: ellipsePoly(c, rng.range(200, 400) * k, rng.range(150, 300) * k, 0, 12) });
+  if (type === 'CANAL') {
+    for (let i = 0; i < Math.round(fill); i++) {
+      if (!rng.chance(0.5)) continue;
+      const c = { x: rng.range(0.06, 0.94) * W, y: rng.range(0.15, 0.6) * H };
+      feats.push({ id: id(), kind: 'marsh', name: 'Marshy Area', poly: ellipsePoly(c, rng.range(200, 400) * k, rng.range(150, 300) * k, 0, 12) });
+    }
   }
-  const nKb = rng.int(1, 3);
+  const nKb = Math.round(rng.int(1, 3) * fill);
   for (let i = 0; i < nKb; i++) {
-    const c = { x: rng.range(0.15, 0.85) * W, y: rng.range(0.2, 0.82) * H };
+    const c = { x: rng.range(0.05, 0.95) * W, y: rng.range(0.2, 0.82) * H };
     feats.push({ id: id(), kind: 'kbund', name: `Kidney Bund ${i + 1}`, c, r: rng.range(150, 220) * Math.max(1, k * 0.6), rot: 180 });
   }
-  const nDunes = type === 'DESERT' ? Math.round(10 * k) : type === 'SEMI_DESERT' ? Math.round(5 * k) : Math.round(3 * k);
+  const nDunes = Math.round((type === 'DESERT' ? 10 * k : type === 'SEMI_DESERT' ? 5 * k : 3 * k) * fill);
   for (let i = 0; i < nDunes; i++) {
     const c = { x: rng.range(0.05, 0.95) * W, y: rng.range(0.05, 0.95) * H };
     feats.push({ id: id(), kind: 'dunes', name: type === 'DESERT' && rng.chance(0.3) ? 'Sand Dunes' : undefined, poly: ellipsePoly(c, rng.range(150, 400) * Math.max(1, k * 0.6), rng.range(40, 110) * Math.max(1, k * 0.6), rng.range(-20, 20), 10) });

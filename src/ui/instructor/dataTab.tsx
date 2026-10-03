@@ -2,6 +2,7 @@ import { useState } from 'preact/hooks';
 import type { AppSettings } from '../../core/types';
 import { hashSecret } from '../../store/auth';
 import { type Bundle, db, dbKind, downloadJson, exportBundle, importBundle, pickJsonFile } from '../../store/db';
+import { AppCard } from '../appCard';
 import { Field, toast } from '../kit';
 import type { Db } from './home';
 
@@ -98,6 +99,7 @@ export function DataTab(p: { d: Db; reload: () => void; settings: AppSettings; o
           Students then open <span class="mono">http://&lt;instructor-pc&gt;:8080</span> in a browser — all results appear on the instructor’s dashboard live.
         </div>
       </div>
+      <AppCard />
       <div class="card col">
         <h3>Danger zone</h3>
         <button

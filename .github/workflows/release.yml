@@ -1,0 +1,106 @@
+# Builds the desktop installers on Windows, macOS and Linux.
+# - Run it by hand (Actions → Release → Run workflow) to get the installers as build artifacts.
+# - Push a tag like v1.2.0 to also publish a GitHub Release with every installer attached.
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: linux
+            flags: --linux
+            files: |
+              release/*.AppImage
+              release/*.deb
+          - os: windows-latest
+            name: windows
+            flags: --win
+            files: |
+              release/*.exe
+          - os: macos-latest
+            name: macos
+            flags: --mac
+            files: |
+              release/*.dmg
+              release/*.zip
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build single-file app
+        run: npm run build
+
+      - name: Build installers
+        run: npx electron-builder ${{ matrix.flags }} --publish never
+        env:
+          # Unsigned builds (macOS is ad-hoc signed via build.mac.identity "-").
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Add the portable single-file app
+        if: matrix.name == 'linux'
+        shell: bash
+        run: cp dist/WarGamer.html "release/WarGamer-$(node -p "require('./package.json').version").html"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wargamer-${{ matrix.name }}
+          path: |
+            ${{ matrix.files }}
+            release/*.html
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la artifacts
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: WarGamer ${{ github.ref_name }}
+          draft: false
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: artifacts/*

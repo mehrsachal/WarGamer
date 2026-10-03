@@ -166,6 +166,22 @@ PNG by `build/render-icons.mjs`).
 - **Student:** assigned exercises, progress over time, strengths and weaknesses, free practice on generated
   scenarios, export of submissions for offline hand-in.
 
+### Optional Claude AI (needs an API key and internet; everything else stays offline)
+Set an Anthropic API key under **Data & settings → Claude AI** or from the **AI** pill in the top bar. The
+key is kept only in this browser profile's localStorage — never in the class database, LAN server, backups,
+packs or exports (anyone using that browser profile can use it). Choose the model (Claude Opus 5.5 by default,
+Sonnet 5.5 or Haiku 4.5), switch features on/off and set a per-battle token budget (default 20,000; hard stop).
+- **Enemy commander:** at key moments (final attk plan, screens contacted, Ph 1 taken/failed, own C attk) Claude
+  picks from the options the built-in planner enumerates. The clock is held at most 8 s, then the built-in
+  commander decides. Choices are recorded with the battle (deterministic replays) and revealed in the AAR.
+- **Radio net:** free-text orders in the wargame ("fire DF 3", "2 Pl move to altn posn", "sitrep 1 Pl"). A
+  built-in parser handles common orders and all sitreps without tokens; only unreadable messages go to Claude.
+- **Text marking:** free-text answers of one submission are marked in one batched call.
+- **Mentor:** "Ask the AI mentor" in the debrief gives <= 200 words of coaching against ICIB principles.
+
+Calls are event-driven with compact prompts (typically a few hundred tokens each). With no key, no network
+or no budget the built-in AI does everything.
+
 ---
 
 ## Development
@@ -188,6 +204,7 @@ src/scenario   BIC-49 preset, random scenario generator, place names
 src/plan       resource slots, auto (DS) plan, contingency catalogue, time & space
 src/sim        engine, enemy AI, own-troop behaviour, sensors/fog, fires/QC/UCAV, combat, injects, orders
 src/assess     plan rubric, decision evaluator, wargame assessment & final score
+src/ai         optional Claude AI: settings, client, enemy cdr, radio net, text judge, mentor
 src/render     map renderer (canvas) and NATO symbols
 src/store      IndexedDB / LAN / memory store, PIN & password hashing
 src/ui         instructor and student dashboards, exercise flow

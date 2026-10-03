@@ -1,4 +1,5 @@
 import { useState } from 'preact/hooks';
+import { AiSettingsCard } from '../../ai/ui/AiSettings';
 import type { AppSettings } from '../../core/types';
 import { hashSecret } from '../../store/auth';
 import { type Bundle, db, dbKind, downloadJson, exportBundle, importBundle, pickJsonFile } from '../../store/db';
@@ -93,6 +94,7 @@ export function DataTab(p: { d: Db; reload: () => void; settings: AppSettings; o
           Save settings
         </button>
       </div>
+      <AiSettingsCard />
       <div class="card col">
         <h3>Classroom network (optional)</h3>
         <div class="muted" style={{ lineHeight: 1.6 }}>

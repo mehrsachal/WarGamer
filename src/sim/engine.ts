@@ -14,7 +14,9 @@ import type {
   WargameSummary,
 } from '../core/types';
 import { TEMPLATES, type WeaponKey } from '../core/units';
+import { areaExtentFacing, areaRadius, isAreaUnit, unitArea } from '../plan/area';
 import { workload } from '../plan/plan';
+import { foundTag, strengthBook } from '../plan/taskorg';
 import { terrainFor, type TerrainModel } from '../terrain/terrain';
 import { runBlue } from './blue';
 import { resolveCloseCombat, resolveDirectFire } from './combat';
@@ -155,19 +157,14 @@ export class Engine {
   // ------------------------------------------------------------------ setup
   private buildBlue(): void {
     const prepared = 0.45 + 0.55 * this.readiness;
-    const parentsDetached = new Map<string, number>();
+    // strength bookkeeping: split elements and detachments (SP/LP found by a locality) are
+    // deducted from the unit they came from (src/plan/taskorg.ts)
+    const book = strengthBook(this.plan);
     for (const pu of this.plan.units) {
       const tpl = TEMPLATES[pu.templateKey];
       if (!tpl) continue;
-      if (pu.parentId && (pu.templateKey === 'RIFLE_SEC' || pu.templateKey === 'LP')) {
-        parentsDetached.set(pu.parentId, (parentsDetached.get(pu.parentId) ?? 0) + tpl.personnel);
-      }
-    }
-    for (const pu of this.plan.units) {
-      const tpl = TEMPLATES[pu.templateKey];
-      if (!tpl) continue;
-      const det = parentsDetached.get(pu.id) ?? 0;
-      const strength = Math.max(Math.round(tpl.personnel * 0.5), tpl.personnel - det);
+      const entry = book.get(pu.id);
+      const strength = entry?.effective ?? tpl.personnel;
       const role = pu.role;
       const dug =
         role === 'FDL' || role === 'DEPTH' || role === 'CHQ' || role === 'CP' || role === 'SP_WPN' || role === 'OBS' || role === 'QC' || role === 'ENGR' || role === 'RES'
@@ -175,7 +172,12 @@ export class Engine {
           : role === 'SCREEN'
             ? 0.45
             : 0.3;
-      const u = this.makeUnit('BLUE', pu.templateKey, pu.id, pu.label, pu.pos, pu.facing, role, strength, dug);
+      const tag = foundTag(this.plan, pu);
+      const label = tag ? `${pu.label} ${tag.replace(/^from /, 'fm ')}` : pu.label;
+      const area = isAreaUnit(pu) ? unitArea(pu) : undefined;
+      const u = this.makeUnit('BLUE', pu.templateKey, pu.id, label, pu.pos, pu.facing, role, strength, dug, area);
+      // split elements / detachments carry only their share of the weapons
+      if (entry && (pu.strength !== undefined || entry.detached > 0)) u.weapons = { ...entry.weapons };
       u.altPos = pu.altPos;
       u.parentId = pu.parentId;
       // LPs deploy only at night: start in their parent locality
@@ -200,7 +202,7 @@ export class Engine {
     this.ammo.MOR60 = mor60 * 60;
   }
 
-  makeUnit(side: 'BLUE' | 'RED', key: string, id: string, label: string, pos: Vec, facing: number, role: SimUnit['role'], strength?: number, dug = 0): SimUnit {
+  makeUnit(side: 'BLUE' | 'RED', key: string, id: string, label: string, pos: Vec, facing: number, role: SimUnit['role'], strength?: number, dug = 0, area?: Vec[]): SimUnit {
     const tpl = TEMPLATES[key];
     const st = strength ?? tpl.personnel;
     const nEl = tpl.elements ?? 1;
@@ -210,14 +212,25 @@ export class Engine {
     const fy = Math.cos(f);
     const lx = Math.cos(f);
     const ly = -Math.sin(f);
-    const sp = tpl.radius * 0.7;
+    // footprint: the template radius, or the equivalent radius of the planned area (goose egg),
+    // kept within sane bounds so exposure / close combat stay calibrated
+    const radius = area && area.length >= 3 ? Math.max(tpl.radius * 0.5, Math.min(tpl.radius * 2, areaRadius(area))) : tpl.radius;
+    // element spread: lateral (half-frontage) and depth (half-depth) of the area in the facing frame.
+    // Defaults reproduce the v1 layout exactly (default egg: front 1.25 r, depth 0.8 r).
+    let spL = tpl.radius * 0.7;
+    let spF = tpl.radius * 0.7;
+    if (area && area.length >= 3) {
+      const ext = areaExtentFacing(area, facing);
+      spL = (ext.front / 1.25) * 0.7;
+      spF = (ext.depth / 0.8) * 0.7;
+    }
     for (let i = 0; i < nEl; i++) {
       // two up one back (or three up for sections); offsets in metres
       let off: Vec;
       if (nEl === 1) off = { x: 0, y: 0 };
-      else if (nEl === 2) off = { x: lx * sp * (i === 0 ? -0.5 : 0.5), y: ly * sp * (i === 0 ? -0.5 : 0.5) };
-      else if (i < 2) off = { x: lx * sp * (i === 0 ? -0.6 : 0.6) + fx * sp * 0.3, y: ly * sp * (i === 0 ? -0.6 : 0.6) + fy * sp * 0.3 };
-      else off = { x: -fx * sp * 0.5 + (i - 2) * lx * sp * 0.4, y: -fy * sp * 0.5 + (i - 2) * ly * sp * 0.4 };
+      else if (nEl === 2) off = { x: lx * spL * (i === 0 ? -0.5 : 0.5), y: ly * spL * (i === 0 ? -0.5 : 0.5) };
+      else if (i < 2) off = { x: lx * spL * (i === 0 ? -0.6 : 0.6) + fx * spF * 0.3, y: ly * spL * (i === 0 ? -0.6 : 0.6) + fy * spF * 0.3 };
+      else off = { x: -fx * spF * 0.5 + (i - 2) * lx * spL * 0.4, y: -fy * spF * 0.5 + (i - 2) * ly * spL * 0.4 };
       elements.push({ name: `${tpl.elementName ?? 'Elm'} ${i + 1}`, str: st / nEl, max: st / nEl, lost: false, off });
     }
     const u: SimUnit = {
@@ -255,7 +268,7 @@ export class Engine {
       sig: 0,
       obsRange: tpl.obsRange,
       nvd: tpl.nvd,
-      radius: tpl.radius,
+      radius,
     };
     this.units.push(u);
     this.byId.set(id, u);

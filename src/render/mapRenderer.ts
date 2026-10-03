@@ -2,7 +2,8 @@
 // conventions), NATO unit symbols, fog of war, fires. Designed for clarity first.
 
 import { type Vec, add, bearing, centroid, dist, ellipsePoly, norm, perpOffset, pointAlong, polylineLength, scale, sub } from '../core/geom';
-import type { DsSolution, Feature, PlanGraphic, Scenario, Side } from '../core/types';
+import type { DsSolution, Echelon, Feature, PlanGraphic, Scenario, Side } from '../core/types';
+import { closedBeziers, openBeziers, sampleClosed, sampleOpen } from '../plan/area';
 import { kidneyBundPts, type TerrainModel } from '../terrain/terrain';
 import { symbolImage } from './symbols';
 
@@ -25,6 +26,23 @@ export interface UnitGlyph {
   stale?: boolean;
   status?: 'OK' | 'ASSAULT' | 'WITHDRAW' | 'LOST' | 'MOVE';
   radius?: number;
+  /**
+   * Goose egg (unit area): closed outline control points, world m, drawn as a smooth closed curve
+   * with the echelon indicator on top and the designation inside — instead of the framed symbol.
+   */
+  area?: Vec[];
+  /** Echelon shown on top of the egg. */
+  echelon?: Echelon;
+  /** Small type glyph inside the egg. */
+  glyph?: 'INF' | 'ARMOUR' | 'HQ' | 'NONE';
+  /** "Found from" connector: drawn from `from` (edge of the parent egg) to the unit, with a tag. */
+  link?: { from: Vec; tag?: string };
+  /** Point-symbol shape override: OP/LP triangle. */
+  shape?: 'OPLP';
+  /** Secondary text under a point symbol / inside an egg (e.g. strength "1+2"). */
+  sub?: string;
+  /** Alternate position as an area (dashed egg). */
+  altArea?: Vec[];
 }
 
 export interface MissionGlyph {
@@ -49,12 +67,20 @@ export interface MapScene {
   qcs?: { pos: Vec; kind: string }[];
   ds?: DsSolution | null;
   enemyPlan?: { faa: Vec; fup: Vec; bof: Vec; objectives: { pos: Vec; name: string; phase: number }[]; approach: Vec[]; names: { faa: string; fup: string; bof: string } } | null;
-  draft?: { kind: string; pts: Vec[]; radius?: number } | null;
+  draft?: { kind: string; pts: Vec[]; radius?: number; closed?: boolean } | null;
   cursor?: Vec | null;
   trails?: { pts: Vec[]; side: Side }[];
   fog?: { cols: number; rows: number; res: number; vis: Uint8Array } | null;
   night?: boolean;
   measure?: { a: Vec; b: Vec } | null;
+  /** Task-organisation groups: larger dashed eggs enclosing their members. */
+  groups?: { id: string; label: string; area: Vec[]; selected?: boolean; echelon?: Echelon }[];
+  /** Additional selected graphics (multi-selection). */
+  selectedGraphicIds?: string[];
+  /** Edit handles of the selected item (vertex / insert / resize / rotate / radius). */
+  handles?: { p: Vec; kind: 'vertex' | 'mid' | 'resize' | 'rotate' | 'radius'; hot?: boolean }[];
+  /** Box-select rectangle. */
+  box?: { a: Vec; b: Vec } | null;
   /** Neutral overlays (no DS priorities): candidate apchs / lines for the appreciation. */
   neutral?: { arrows: { pts: Vec[]; label: string; hi?: boolean }[]; lines: { pts: Vec[]; label: string; hi?: boolean }[] } | null;
 }
@@ -81,6 +107,15 @@ const PALETTE = {
   DESERT: [241, 228, 196],
   SEMI_DESERT: [238, 233, 210],
 } as const;
+
+/** Free-drawing colours (PlanGraphic.props.color). */
+const GCOL: Record<string, string> = { BLUE: '#0b5cad', RED: '#c62828', BLACK: '#1b2329', GREEN: '#13803a', PURPLE: '#5b2a86', AMBER: '#c77700' };
+const SEL_GLOW = 'rgba(255,179,0,0.75)';
+
+function withAlpha(hex: string, a: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
 
 const C = {
   bg: '#141a1f',
@@ -292,14 +327,18 @@ export class MapRenderer {
     }
     if (sc.ds) this.drawDs(sc.ds);
     if (sc.enemyPlan) this.drawEnemyPlan(sc.enemyPlan);
-    if (this.layers.graphics) for (const gr of sc.graphics) this.drawGraphic(gr, gr.id === sc.selectedGraphicId);
+    if (this.layers.graphics) for (const gr of sc.graphics) this.drawGraphic(gr, gr.id === sc.selectedGraphicId || !!sc.selectedGraphicIds?.includes(gr.id));
     if (sc.trails) this.drawTrails(sc.trails);
     if (sc.missions) this.drawMissions(sc.missions);
+    if (sc.groups) this.drawGroups(sc.groups);
     this.drawUnits(sc.units);
+    if (sc.groups) this.drawGroupLabels(sc.groups);
     if (sc.qcs) this.drawQcs(sc.qcs);
     if (sc.fires) this.drawFires(sc.fires);
     if (sc.draft) this.drawDraft(sc.draft);
     if (sc.measure) this.drawMeasure(sc.measure);
+    if (sc.box) this.drawBox(sc.box);
+    if (sc.handles) this.drawHandles(sc.handles);
     g.restore();
     if (this.layers.decor) this.drawFrame(tl, br);
   }
@@ -789,10 +828,12 @@ export class MapRenderer {
     }
   }
 
-  private arrow(pts: Vec[], color: string, widthPx: number, dashed = false, label?: string, head = true): void {
+  private arrow(pts: Vec[], color: string, widthPx: number, dashed = false, label?: string, head = true, smooth = false): void {
     const g = this.ctx;
     if (pts.length < 2) return;
-    this.path(pts);
+    const curved = smooth && pts.length >= 3;
+    if (curved) this.smoothPath(pts);
+    else this.path(pts);
     g.strokeStyle = color;
     g.lineWidth = widthPx;
     g.lineJoin = 'round';
@@ -800,9 +841,10 @@ export class MapRenderer {
     if (dashed) g.setLineDash([widthPx * 2.5, widthPx * 1.6]);
     g.stroke();
     g.setLineDash([]);
+    const line = curved ? sampleOpen(pts, 8) : pts;
     if (head) {
-      const a = this.toScreen(pts[pts.length - 2]);
-      const b = this.toScreen(pts[pts.length - 1]);
+      const a = this.toScreen(line[line.length - 2]);
+      const b = this.toScreen(line[line.length - 1]);
       const ang = Math.atan2(b.y - a.y, b.x - a.x);
       const hl = Math.max(10, widthPx * 3.2);
       g.beginPath();
@@ -814,7 +856,7 @@ export class MapRenderer {
       g.fill();
     }
     if (label) {
-      const m = this.toScreen(pointAlong(pts, polylineLength(pts) * 0.5));
+      const m = this.toScreen(pointAlong(line, polylineLength(line) * 0.5));
       this.halo(label, m.x, m.y - 12, 12, color, 'center', 700);
     }
   }
@@ -889,17 +931,22 @@ export class MapRenderer {
 
   private drawGraphicInner(gr: PlanGraphic, sel: number): void {
     const g = this.ctx;
+    const smooth = !!gr.props.smooth;
+    const col = gr.props.color ? GCOL[gr.props.color] : undefined;
+    if (!gr.pts.length) return;
     switch (gr.kind) {
       case 'FDL': {
-        this.path(gr.pts);
-        g.strokeStyle = C.blue;
+        if (sel) this.selGlow(() => this.shapePath(gr.pts, false, smooth), 3 + sel);
+        this.shapePath(gr.pts, false, smooth);
+        g.strokeStyle = col ?? C.blue;
         g.lineWidth = 3 + sel;
         g.stroke();
         // teeth toward the enemy (north)
-        const L = polylineLength(gr.pts);
+        const along = smooth ? sampleOpen(gr.pts, 8) : gr.pts;
+        const L = polylineLength(along);
         g.lineWidth = 2;
         for (let d = 40; d < L; d += Math.max(60, 25 / this.scale)) {
-          const a = pointAlong(gr.pts, d);
+          const a = pointAlong(along, d);
           const sA = this.toScreen(a);
           g.beginPath();
           g.moveTo(sA.x - 5, sA.y);
@@ -908,40 +955,47 @@ export class MapRenderer {
           g.stroke();
         }
         const s = this.toScreen(gr.pts[0]);
-        this.halo(gr.props.label ?? 'FDLs', s.x + 6, s.y - 14, 13, C.blue, 'left', 800);
+        this.halo(gr.props.label ?? 'FDLs', s.x + 6, s.y - 14, 13, col ?? C.blue, 'left', 800);
         break;
       }
       case 'KILL_AREA': {
-        this.path(gr.pts, true);
+        if (gr.pts.length < 3) break;
+        if (sel) this.selGlow(() => this.shapePath(gr.pts, true, smooth), 2.5 + sel);
+        this.shapePath(gr.pts, true, smooth);
         const prim = gr.props.subtype !== 'SECONDARY';
         g.fillStyle = prim ? 'rgba(11,92,173,0.10)' : 'rgba(11,92,173,0.06)';
         g.fill();
-        g.strokeStyle = C.blue;
+        g.strokeStyle = col ?? C.blue;
         g.lineWidth = (prim ? 2.5 : 1.8) + sel;
         g.setLineDash(prim ? [] : [7, 5]);
         g.stroke();
         g.setLineDash([]);
         const c = this.toScreen(centroid(gr.pts));
-        this.halo(gr.props.label ?? (prim ? 'KA (Pri)' : 'KA (Sec)'), c.x, c.y, 12, C.blue, 'center', 800);
+        this.halo(gr.props.label ?? (prim ? 'KA (Pri)' : 'KA (Sec)'), c.x, c.y, 12, col ?? C.blue, 'center', 800);
         break;
       }
       case 'MINEFIELD': {
+        if (gr.pts.length < 2) break;
         const tac = gr.props.subtype === 'TACTICAL' || gr.props.subtype === 'DEFENSIVE';
         const depthM = tac ? 60 : 40;
-        const a = gr.pts[0];
-        const b = gr.pts[gr.pts.length - 1];
-        const o = perpOffset(a, b, depthM / 2);
-        const box = [add(a, o), add(b, o), sub(b, o), sub(a, o)];
-        this.path(box, true);
-        g.fillStyle = 'rgba(19,128,58,0.12)';
-        g.fill();
-        g.strokeStyle = C.obstacle;
-        g.lineWidth = 2 + sel;
-        g.stroke();
-        const L = dist(a, b);
-        const n = Math.max(2, Math.min(12, Math.floor(L * this.scale / 22)));
+        const line = smooth ? sampleOpen(gr.pts, 6) : gr.pts;
+        if (sel) this.selGlow(() => this.path(line), depthM * this.scale + 6);
+        for (let i = 1; i < line.length; i++) {
+          const a = line[i - 1];
+          const b = line[i];
+          if (dist(a, b) < 0.5) continue;
+          const o = perpOffset(a, b, depthM / 2);
+          this.path([add(a, o), add(b, o), sub(b, o), sub(a, o)], true);
+          g.fillStyle = 'rgba(19,128,58,0.12)';
+          g.fill();
+          g.strokeStyle = C.obstacle;
+          g.lineWidth = 2 + sel;
+          g.stroke();
+        }
+        const L = polylineLength(line);
+        const n = Math.max(2, Math.min(24, Math.floor((L * this.scale) / 22)));
         for (let i = 0; i < n; i++) {
-          const p = this.toScreen(pointAlong([a, b], ((i + 0.5) / n) * L));
+          const p = this.toScreen(pointAlong(line, ((i + 0.5) / n) * L));
           g.beginPath();
           g.arc(p.x, p.y, 3.5, 0, Math.PI * 2);
           g.fillStyle = tac ? C.obstacle : '#fff';
@@ -956,26 +1010,32 @@ export class MapRenderer {
             g.stroke();
           }
         }
-        const m = this.toScreen(pointAlong([a, b], L / 2));
+        const m = this.toScreen(pointAlong(line, L / 2));
         this.halo(gr.props.label ?? (tac ? 'A tk Mfd' : 'Prot Mfd'), m.x, m.y - 14, 11, C.obstacle, 'center', 800);
         break;
       }
       case 'WIRE': {
-        this.path(gr.pts);
+        if (sel) this.selGlow(() => this.shapePath(gr.pts, false, smooth), 2 + sel);
+        this.shapePath(gr.pts, false, smooth);
         g.strokeStyle = C.obstacle;
         g.lineWidth = 1.6 + sel;
         g.stroke();
-        const L = polylineLength(gr.pts);
+        const along = smooth ? sampleOpen(gr.pts, 8) : gr.pts;
+        const L = polylineLength(along);
         const step = Math.max(12 / this.scale, 25);
         g.lineWidth = 1.4;
         for (let d = step / 2; d < L; d += step) {
-          const p = this.toScreen(pointAlong(gr.pts, d));
+          const p = this.toScreen(pointAlong(along, d));
           g.beginPath();
           g.moveTo(p.x - 4, p.y - 4);
           g.lineTo(p.x + 4, p.y + 4);
           g.moveTo(p.x + 4, p.y - 4);
           g.lineTo(p.x - 4, p.y + 4);
           g.stroke();
+        }
+        if (gr.props.label && gr.props.label !== 'Wire') {
+          const m = this.toScreen(pointAlong(along, L / 2));
+          this.halo(gr.props.label, m.x, m.y - 12, 11, C.obstacle, 'center', 800);
         }
         break;
       }
@@ -984,6 +1044,11 @@ export class MapRenderer {
         const r = this.px(gr.props.radius ?? 150, 9, 80);
         g.beginPath();
         g.arc(p.x, p.y, r, 0, Math.PI * 2);
+        if (sel) {
+          g.strokeStyle = SEL_GLOW;
+          g.lineWidth = 7;
+          g.stroke();
+        }
         g.strokeStyle = gr.props.sos ? '#b00020' : C.fire;
         g.lineWidth = (gr.props.sos ? 3 : 2) + sel;
         g.stroke();
@@ -1003,14 +1068,17 @@ export class MapRenderer {
         break;
       }
       case 'CATK':
-        this.arrow(gr.pts, C.blue, 3 + sel, true, `${gr.props.label ?? 'C ATTK'}${gr.props.priority ? ` (Pri ${gr.props.priority})` : ''}`);
+        if (sel) this.selGlow(() => this.shapePath(gr.pts, false, smooth), 3 + sel);
+        this.arrow(gr.pts, col ?? C.blue, 3 + sel, true, `${gr.props.label ?? 'C ATTK'}${gr.props.priority ? ` (Pri ${gr.props.priority})` : ''}`, true, smooth);
         break;
       case 'CPEN': {
         const p = this.toScreen(gr.pts[0]);
-        g.strokeStyle = C.blue;
+        g.strokeStyle = sel ? '#ffb300' : C.blue;
         g.lineWidth = 2 + sel;
         g.setLineDash([5, 4]);
-        g.strokeRect(p.x - 22, p.y - 12, 44, 24);
+        g.beginPath();
+        g.ellipse(p.x, p.y, 28, 14, 0, 0, Math.PI * 2);
+        g.stroke();
         g.setLineDash([]);
         this.halo(gr.props.label ?? 'C PEN', p.x, p.y, 11, C.blue, 'center', 800);
         break;
@@ -1020,6 +1088,11 @@ export class MapRenderer {
         const r = this.px(gr.props.radius ?? 600, 14, 400);
         g.beginPath();
         g.arc(p.x, p.y, r, 0, Math.PI * 2);
+        if (sel) {
+          g.strokeStyle = SEL_GLOW;
+          g.lineWidth = 6;
+          g.stroke();
+        }
         g.strokeStyle = '#6a1b9a';
         g.lineWidth = 2 + sel;
         g.setLineDash([3, 5]);
@@ -1029,23 +1102,583 @@ export class MapRenderer {
         break;
       }
       case 'PTL_ROUTE':
-        this.arrow(gr.pts, '#0b5cad', 2 + sel, true, gr.props.label ?? 'Ptl', false);
+        if (sel) this.selGlow(() => this.shapePath(gr.pts, false, smooth), 2 + sel);
+        this.arrow(gr.pts, col ?? '#0b5cad', 2 + sel, true, gr.props.label ?? 'Ptl', false, smooth);
         break;
       case 'NOTE': {
         const p = this.toScreen(gr.pts[0]);
+        if (sel) this.textBox(gr.props.text ?? '', p.x, p.y, 12, 'left');
         this.halo(gr.props.text ?? '', p.x, p.y, 12, '#222', 'left', 700);
+        break;
+      }
+      case 'FREE':
+      case 'AREA': {
+        const closed = gr.kind === 'AREA' || !!gr.props.closed;
+        const sm = gr.props.smooth !== false;
+        if (closed && gr.pts.length < 3) break;
+        const c2 = col ?? (gr.kind === 'AREA' ? C.blue : '#1b2329');
+        const w = gr.props.width ?? (gr.kind === 'AREA' ? 2.2 : 2.5);
+        if (sel) this.selGlow(() => this.shapePath(gr.pts, closed, sm), w + sel);
+        this.shapePath(gr.pts, closed, sm);
+        if (closed && (gr.props.fill ?? gr.kind === 'AREA')) {
+          g.fillStyle = withAlpha(c2, 0.1);
+          g.fill();
+        }
+        g.strokeStyle = c2;
+        g.lineWidth = w + sel;
+        g.lineJoin = 'round';
+        g.lineCap = 'round';
+        if (gr.props.dash) g.setLineDash([w * 3.2, w * 2.2]);
+        g.stroke();
+        g.setLineDash([]);
+        const lbl = gr.props.label ?? gr.props.text;
+        if (lbl) {
+          const at = closed ? this.toScreen(centroid(sm ? sampleClosed(gr.pts, 4) : gr.pts)) : this.toScreen(pointAlong(gr.pts, polylineLength(gr.pts) / 2));
+          this.halo(lbl, at.x, at.y - (closed ? 0 : 12), 12, c2, 'center', 800);
+        }
+        break;
+      }
+      case 'ARROW': {
+        if (gr.pts.length < 2) break;
+        const c2 = col ?? C.blue;
+        const w = gr.props.width ?? 3;
+        if (sel) this.selGlow(() => this.shapePath(gr.pts, false, gr.props.smooth !== false), w + sel);
+        this.arrow(gr.pts, c2, w + sel, !!gr.props.dash, gr.props.label, true, gr.props.smooth !== false);
+        break;
+      }
+      case 'TEXT': {
+        const p = this.toScreen(gr.pts[0]);
+        const size = 10 + (gr.props.width ?? 2) * 2;
+        const t = gr.props.text ?? gr.props.label ?? '';
+        g.save();
+        g.translate(p.x, p.y);
+        if (gr.props.rot) g.rotate((gr.props.rot * Math.PI) / 180);
+        if (sel) this.textBox(t, 0, 0, size, 'center');
+        this.halo(t || '…', 0, 0, size, col ?? '#1b2329', 'center', 800);
+        g.restore();
+        break;
+      }
+      case 'PHASE_LINE': {
+        if (gr.pts.length < 2) break;
+        if (sel) this.selGlow(() => this.shapePath(gr.pts, false, smooth), 2.5 + sel);
+        this.shapePath(gr.pts, false, smooth);
+        g.strokeStyle = col ?? '#1b2329';
+        g.lineWidth = 2.5 + sel;
+        g.stroke();
+        const name = `PL ${gr.props.label ?? ''}`.trim();
+        const a = this.toScreen(gr.pts[0]);
+        const b = this.toScreen(gr.pts[gr.pts.length - 1]);
+        this.halo(name, a.x, a.y - 12, 12, col ?? '#1b2329', 'center', 800);
+        this.halo(name, b.x, b.y - 12, 12, col ?? '#1b2329', 'center', 800);
+        break;
+      }
+      case 'BOUNDARY': {
+        if (gr.pts.length < 2) break;
+        if (sel) this.selGlow(() => this.shapePath(gr.pts, false, smooth), 4 + sel);
+        this.shapePath(gr.pts, false, smooth);
+        g.strokeStyle = col ?? '#111';
+        g.lineWidth = 4 + sel;
+        g.stroke();
+        const along = smooth ? sampleOpen(gr.pts, 6) : gr.pts;
+        const m = this.toScreen(pointAlong(along, polylineLength(along) / 2));
+        const e = (gr.props.subtype as Echelon | undefined) ?? 'COY';
+        g.fillStyle = 'rgba(255,255,255,0.92)';
+        g.fillRect(m.x - 22, m.y - 16, 44, 32);
+        this.echelonMark(e, m.x, m.y - 2, col ?? '#111');
+        if (gr.props.label) this.halo(gr.props.label, m.x, m.y + 9, 10, col ?? '#111', 'center', 800);
+        break;
+      }
+      case 'OBSTACLE': {
+        if (gr.pts.length < 2) {
+          const p = this.toScreen(gr.pts[0]);
+          this.halo(gr.props.label ?? 'Obs', p.x, p.y, 11, C.obstacle, 'center', 800);
+          break;
+        }
+        const along = smooth ? sampleOpen(gr.pts, 6) : gr.pts;
+        if (sel) this.selGlow(() => this.path(along), 6);
+        this.drawObstacleLine(along, gr.props.subtype ?? 'GENERAL', col ?? C.obstacle);
+        if (gr.props.label) {
+          const m = this.toScreen(pointAlong(along, polylineLength(along) / 2));
+          this.halo(gr.props.label, m.x, m.y - 16, 11, col ?? C.obstacle, 'center', 800);
+        }
+        break;
+      }
+      case 'TRP':
+      case 'SYMBOL': {
+        const p = this.toScreen(gr.pts[0]);
+        const sidc = gr.kind === 'TRP' ? 'GFGPDPT--------' : gr.props.sidc ?? 'GFGPGPRI-------';
+        const size = gr.kind === 'TRP' ? 26 : 28;
+        const img = symbolImage(sidc, { size, label: gr.props.label, info: true });
+        const d = this.dprSym();
+        if (sel) {
+          g.beginPath();
+          g.arc(p.x, p.y, size * 0.8, 0, Math.PI * 2);
+          g.strokeStyle = SEL_GLOW;
+          g.lineWidth = 4;
+          g.stroke();
+        }
+        g.save();
+        g.translate(p.x, p.y);
+        if (gr.props.rot) g.rotate((gr.props.rot * Math.PI) / 180);
+        g.drawImage(img.canvas, -img.ax, -img.ay, img.canvas.width / d, img.canvas.height / d);
+        g.restore();
         break;
       }
     }
   }
 
+  /** Amber selection glow under a path. */
+  private selGlow(path: () => void, w: number): void {
+    const g = this.ctx;
+    path();
+    g.save();
+    g.strokeStyle = SEL_GLOW;
+    g.lineWidth = w + 6;
+    g.lineJoin = 'round';
+    g.lineCap = 'round';
+    g.stroke();
+    g.restore();
+  }
+
+  private textBox(t: string, x: number, y: number, size: number, align: 'left' | 'center'): void {
+    const g = this.ctx;
+    g.font = `800 ${size}px Bahnschrift, 'Arial Narrow', Arial, sans-serif`;
+    const w = g.measureText(t || '…').width + 10;
+    const x0 = align === 'left' ? x - 5 : x - w / 2;
+    g.strokeStyle = '#ffb300';
+    g.lineWidth = 2;
+    g.setLineDash([4, 3]);
+    g.strokeRect(x0, y - size * 0.75, w, size * 1.5);
+    g.setLineDash([]);
+  }
+
+  /** Linear obstacles (APP-6 style): abatis, A tk ditch, road block, general obstacle line. */
+  private drawObstacleLine(pts: Vec[], kind: string, color: string): void {
+    const g = this.ctx;
+    const L = polylineLength(pts);
+    const step = Math.max(16 / this.scale, 20);
+    g.strokeStyle = color;
+    g.fillStyle = color;
+    g.lineWidth = 2;
+    g.lineJoin = 'round';
+    if (kind === 'AT_DITCH') {
+      // line with solid teeth toward the enemy side (left of the drawing direction)
+      this.path(pts);
+      g.stroke();
+      for (let d = step / 2; d < L; d += step) {
+        const a = pointAlong(pts, Math.max(0, d - step * 0.3));
+        const b = pointAlong(pts, Math.min(L, d + step * 0.3));
+        const sa = this.toScreen(a);
+        const sb = this.toScreen(b);
+        const m = { x: (sa.x + sb.x) / 2, y: (sa.y + sb.y) / 2 };
+        const n = { x: sb.y - sa.y, y: -(sb.x - sa.x) };
+        const nl = Math.hypot(n.x, n.y) || 1;
+        g.beginPath();
+        g.moveTo(sa.x, sa.y);
+        g.lineTo(m.x + (n.x / nl) * 8, m.y + (n.y / nl) * 8);
+        g.lineTo(sb.x, sb.y);
+        g.closePath();
+        g.fill();
+      }
+      return;
+    }
+    if (kind === 'ABATIS') {
+      this.path(pts);
+      g.stroke();
+      for (let d = step / 2; d < L; d += step) {
+        const a = this.toScreen(pointAlong(pts, d));
+        const b = this.toScreen(pointAlong(pts, Math.min(L, d + 1)));
+        const ang = Math.atan2(b.y - a.y, b.x - a.x);
+        g.beginPath();
+        g.moveTo(a.x, a.y);
+        g.lineTo(a.x + Math.cos(ang - 0.9) * 10, a.y + Math.sin(ang - 0.9) * 10);
+        g.moveTo(a.x, a.y);
+        g.lineTo(a.x + Math.cos(ang - 2.2) * 10, a.y + Math.sin(ang - 2.2) * 10);
+        g.stroke();
+      }
+      return;
+    }
+    if (kind === 'ROADBLOCK') {
+      this.path(pts);
+      g.lineWidth = 5;
+      g.stroke();
+      const a = this.toScreen(pts[0]);
+      const b = this.toScreen(pts[pts.length - 1]);
+      for (const p of [a, b]) {
+        g.beginPath();
+        g.arc(p.x, p.y, 4, 0, Math.PI * 2);
+        g.fill();
+      }
+      return;
+    }
+    // general obstacle line: zig-zag
+    g.beginPath();
+    let first = true;
+    const zs = Math.max(10 / this.scale, 12);
+    for (let d = 0, i = 0; d <= L; d += zs, i++) {
+      const p = pointAlong(pts, d);
+      const q = pointAlong(pts, Math.min(L, d + 1));
+      const sp = this.toScreen(p);
+      const sq = this.toScreen(q);
+      const n = { x: sq.y - sp.y, y: -(sq.x - sp.x) };
+      const nl = Math.hypot(n.x, n.y) || 1;
+      const k = i % 2 ? 6 : -6;
+      const x = sp.x + (n.x / nl) * k;
+      const y = sp.y + (n.y / nl) * k;
+      if (first) g.moveTo(x, y);
+      else g.lineTo(x, y);
+      first = false;
+    }
+    g.stroke();
+  }
+
+  /** Smooth closed outline (goose egg) path in screen space. */
+  private eggPath(pts: Vec[]): void {
+    const g = this.ctx;
+    const s = pts.map((p) => this.toScreen(p));
+    g.beginPath();
+    if (s.length < 3) {
+      s.forEach((p, i) => (i ? g.lineTo(p.x, p.y) : g.moveTo(p.x, p.y)));
+      g.closePath();
+      return;
+    }
+    g.moveTo(s[0].x, s[0].y);
+    for (const b of closedBeziers(s)) g.bezierCurveTo(b.c1.x, b.c1.y, b.c2.x, b.c2.y, b.to.x, b.to.y);
+    g.closePath();
+  }
+
+  /** Smooth open curve path in screen space. */
+  private smoothPath(pts: Vec[]): void {
+    const g = this.ctx;
+    const s = pts.map((p) => this.toScreen(p));
+    g.beginPath();
+    if (!s.length) return;
+    g.moveTo(s[0].x, s[0].y);
+    if (s.length < 3) {
+      for (let i = 1; i < s.length; i++) g.lineTo(s[i].x, s[i].y);
+      return;
+    }
+    for (const b of openBeziers(s)) g.bezierCurveTo(b.c1.x, b.c1.y, b.c2.x, b.c2.y, b.to.x, b.to.y);
+  }
+
+  /** Path for a graphic outline: straight or smooth, open or closed. */
+  private shapePath(pts: Vec[], closed: boolean, smooth: boolean): void {
+    if (smooth && pts.length >= 3) {
+      if (closed) this.eggPath(pts);
+      else this.smoothPath(pts);
+    } else this.path(pts, closed);
+  }
+
+  /** Screen-space sampled outline and its extremes. */
+  private eggScreen(area: Vec[]): { pts: Vec[]; top: Vec; minX: number; maxX: number; minY: number; maxY: number; c: Vec } {
+    const pts = sampleClosed(area, 6).map((p) => this.toScreen(p));
+    let top = pts[0];
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    let cx = 0;
+    let cy = 0;
+    for (const p of pts) {
+      if (p.y < top.y) top = p;
+      minX = Math.min(minX, p.x);
+      maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y);
+      maxY = Math.max(maxY, p.y);
+      cx += p.x;
+      cy += p.y;
+    }
+    return { pts, top, minX, maxX, minY, maxY, c: { x: cx / pts.length, y: cy / pts.length } };
+  }
+
+  /** NATO echelon indicator centred on x with its base on y. */
+  private echelonMark(e: Echelon | undefined, x: number, y: number, color: string): void {
+    if (!e || e === 'TEAM') return;
+    const g = this.ctx;
+    const draw = (stroke: string, lw: number, r: number) => {
+      g.strokeStyle = stroke;
+      g.fillStyle = stroke;
+      g.lineWidth = lw;
+      g.lineCap = 'round';
+      const dots = e === 'SEC' ? 2 : e === 'PL' ? 3 : 0;
+      if (dots) {
+        for (let i = 0; i < dots; i++) {
+          g.beginPath();
+          g.arc(x + (i - (dots - 1) / 2) * 7.5, y - 4, r, 0, Math.PI * 2);
+          g.fill();
+        }
+        return;
+      }
+      g.beginPath();
+      const bars = e === 'COY' ? 1 : e === 'BN' ? 2 : 0;
+      if (bars) {
+        for (let i = 0; i < bars; i++) {
+          const bx = x + (i - (bars - 1) / 2) * 6;
+          g.moveTo(bx, y - 11);
+          g.lineTo(bx, y);
+        }
+      } else {
+        const xs = e === 'DIV' ? [-6, 6] : [0];
+        for (const dx of xs) {
+          g.moveTo(x + dx - 5, y - 11);
+          g.lineTo(x + dx + 5, y);
+          g.moveTo(x + dx + 5, y - 11);
+          g.lineTo(x + dx - 5, y);
+        }
+      }
+      g.stroke();
+    };
+    draw('rgba(255,255,255,0.95)', 5.5, 4.2);
+    draw(color, 2.2, 2.7);
+  }
+
+  /** Small type glyph inside an egg. */
+  private eggGlyph(kind: UnitGlyph['glyph'], x: number, y: number, color: string): void {
+    if (!kind || kind === 'NONE') return;
+    const g = this.ctx;
+    const w = 18;
+    const h = 11;
+    g.save();
+    g.strokeStyle = color;
+    g.lineWidth = 1.6;
+    if (kind === 'INF') {
+      g.beginPath();
+      g.moveTo(x - w / 2, y - h / 2);
+      g.lineTo(x + w / 2, y + h / 2);
+      g.moveTo(x + w / 2, y - h / 2);
+      g.lineTo(x - w / 2, y + h / 2);
+      g.stroke();
+    } else if (kind === 'ARMOUR') {
+      g.beginPath();
+      g.ellipse(x, y, w / 2, h / 2.4, 0, 0, Math.PI * 2);
+      g.stroke();
+    } else if (kind === 'HQ') {
+      this.halo('HQ', x, y, 10, color, 'center', 800);
+    }
+    g.restore();
+  }
+
+  private colorOf(u: UnitGlyph): string {
+    if (u.status === 'LOST') return '#6b7480';
+    return u.side === 'RED' ? C.enemy : u.side === 'UNK' ? '#8a6d00' : C.blue;
+  }
+
+  private drawGroups(groups: NonNullable<MapScene['groups']>): void {
+    const g = this.ctx;
+    for (const gr of groups) {
+      if (gr.area.length < 3) continue;
+      this.eggPath(gr.area);
+      g.fillStyle = 'rgba(11,92,173,0.035)';
+      g.fill();
+      if (gr.selected) {
+        g.strokeStyle = 'rgba(255,179,0,0.9)';
+        g.lineWidth = 5;
+        g.stroke();
+      }
+      g.strokeStyle = 'rgba(11,92,173,0.85)';
+      g.lineWidth = 1.8;
+      g.setLineDash([10, 6]);
+      g.stroke();
+      g.setLineDash([]);
+    }
+  }
+
+  /** Group name tags on top of the outline (drawn above the units). */
+  private drawGroupLabels(groups: NonNullable<MapScene['groups']>): void {
+    const g = this.ctx;
+    for (const gr of groups) {
+      if (gr.area.length < 3 || !(this.layers.labels || gr.selected)) continue;
+      const es = this.eggScreen(gr.area);
+      const lx = es.top.x;
+      const ly = es.top.y - 2;
+      g.font = `800 12px Bahnschrift, 'Arial Narrow', Arial, sans-serif`;
+      const tw = g.measureText(gr.label).width + 12;
+      g.fillStyle = gr.selected ? 'rgba(255,179,0,0.95)' : 'rgba(11,92,173,0.92)';
+      g.beginPath();
+      g.roundRect(lx - tw / 2, ly - 9, tw, 18, 4);
+      g.fill();
+      g.fillStyle = gr.selected ? '#1a1300' : '#fff';
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.fillText(gr.label, lx, ly + 0.5);
+    }
+  }
+
+  /** True if the egg is big enough on screen to be drawn as an area. */
+  private eggVisible(u: UnitGlyph): boolean {
+    if (!u.area || u.area.length < 3) return false;
+    return Math.sqrt(eggSize(u)) * this.scale >= 16;
+  }
+
+  private drawEgg(u: UnitGlyph): void {
+    const g = this.ctx;
+    const area = u.area!;
+    const col = this.colorOf(u);
+    const lost = u.status === 'LOST';
+    const pct = u.strengthPct === undefined ? 100 : Math.max(0, Math.min(100, u.strengthPct));
+    g.save();
+    g.globalAlpha = u.dim && !lost ? 0.5 : u.conf !== undefined ? 0.45 + 0.55 * u.conf : 1;
+    this.eggPath(area);
+    if (lost) g.fillStyle = 'rgba(110,116,128,0.16)';
+    else if (u.side === 'RED') g.fillStyle = 'rgba(198,40,40,0.06)';
+    else g.fillStyle = `rgba(11,92,173,${(0.05 + 0.13 * (pct / 100)).toFixed(3)})`;
+    g.fill();
+    if (u.selected) {
+      g.strokeStyle = 'rgba(255,179,0,0.95)';
+      g.lineWidth = 6;
+      g.stroke();
+    }
+    g.strokeStyle = col;
+    g.lineWidth = u.selected ? 2.8 : 2.3;
+    g.lineJoin = 'round';
+    if (u.planned) g.setLineDash([9, 6]);
+    g.stroke();
+    g.setLineDash([]);
+    const es = this.eggScreen(area);
+    const wpx = es.maxX - es.minX;
+    const hpx = es.maxY - es.minY;
+    if (lost) {
+      // crossed out: locality lost
+      g.strokeStyle = 'rgba(80,86,96,0.85)';
+      g.lineWidth = 2;
+      g.beginPath();
+      g.moveTo(es.c.x - wpx * 0.32, es.c.y - hpx * 0.32);
+      g.lineTo(es.c.x + wpx * 0.32, es.c.y + hpx * 0.32);
+      g.moveTo(es.c.x + wpx * 0.32, es.c.y - hpx * 0.32);
+      g.lineTo(es.c.x - wpx * 0.32, es.c.y + hpx * 0.32);
+      g.stroke();
+    }
+    const roomy = wpx > 56 && hpx > 30;
+    if (u.side !== 'RED' && roomy && hpx > 54 && u.glyph && u.glyph !== 'NONE') this.eggGlyph(u.glyph, es.c.x, es.c.y - hpx * 0.14, col);
+    g.restore();
+  }
+
+  /** Echelon mark, designation, strength and status of an egg — drawn above the point symbols. */
+  private drawEggLabels(u: UnitGlyph): void {
+    if (u.side === 'RED') return;
+    const g = this.ctx;
+    const col = this.colorOf(u);
+    const lost = u.status === 'LOST';
+    const pct = u.strengthPct === undefined ? 100 : Math.max(0, Math.min(100, u.strengthPct));
+    const es = this.eggScreen(u.area!);
+    const wpx = es.maxX - es.minX;
+    const hpx = es.maxY - es.minY;
+    g.save();
+    g.globalAlpha = u.dim && !lost ? 0.6 : 1;
+    this.echelonMark(u.echelon, es.top.x, es.top.y - 3, col);
+    // designation: inside the lower part of the egg when there is room, else under it
+    const roomy = wpx > 56 && hpx > 30;
+    const fs = Math.max(11, Math.min(14, 10 + wpx / 60));
+    const ly = roomy ? es.c.y + Math.max(8, hpx * 0.22) : es.maxY + 10;
+    if (this.layers.labels || u.selected) this.halo(u.label, es.c.x, ly, fs, col, 'center', 800);
+    let by = ly + fs * 0.7;
+    if (u.sub && (this.layers.labels || u.selected)) {
+      this.halo(u.sub, es.c.x, by + 5, 10, col, 'center', 600);
+      by += 12;
+    }
+    if (u.link?.tag && !lost && (this.layers.labels || u.selected)) {
+      this.tagPill(u.link.tag, es.c.x, by + 9, 'center', col);
+      by += 18;
+    }
+    if (u.strengthPct !== undefined && u.side !== 'UNK' && !lost) {
+      const w = Math.min(46, Math.max(26, wpx * 0.4));
+      g.fillStyle = 'rgba(0,0,0,0.5)';
+      g.fillRect(es.c.x - w / 2 - 1, by + 1, w + 2, 6);
+      g.fillStyle = pct > 66 ? '#43a047' : pct > 33 ? '#fbc02d' : '#e53935';
+      g.fillRect(es.c.x - w / 2, by + 2, (w * pct) / 100, 4);
+    }
+    if (u.status === 'ASSAULT' || u.status === 'WITHDRAW') this.halo(u.status === 'ASSAULT' ? 'ASLT' : 'WDR', es.maxX + 4, es.top.y + 8, 10, col, 'left', 800);
+    if (lost) this.halo('LOST', es.c.x, roomy ? es.c.y - hpx * 0.22 : es.minY - 10, 10, '#3d424a', 'center', 800);
+    g.restore();
+  }
+
+  private drawOpLp(u: UnitGlyph, p: Vec, size: number): void {
+    const g = this.ctx;
+    const col = this.colorOf(u);
+    const s = size * 0.7;
+    g.save();
+    g.globalAlpha = u.dim ? 0.5 : 1;
+    g.beginPath();
+    g.moveTo(p.x, p.y - s * 0.62);
+    g.lineTo(p.x + s * 0.58, p.y + s * 0.38);
+    g.lineTo(p.x - s * 0.58, p.y + s * 0.38);
+    g.closePath();
+    g.fillStyle = 'rgba(255,255,255,0.92)';
+    g.fill();
+    g.lineWidth = 4.5;
+    g.strokeStyle = 'rgba(255,255,255,0.9)';
+    g.stroke();
+    g.lineWidth = 2;
+    g.strokeStyle = col;
+    if (u.planned) g.setLineDash([4, 3]);
+    g.stroke();
+    g.setLineDash([]);
+    g.beginPath();
+    g.arc(p.x, p.y + s * 0.05, 2.2, 0, Math.PI * 2);
+    g.fillStyle = col;
+    g.fill();
+    g.restore();
+    if (this.layers.labels || u.selected) this.halo(u.label, p.x + s * 0.72, p.y - 1, 11, col, 'left', 800);
+  }
+
+  private drawLink(u: UnitGlyph, p: Vec, size: number): void {
+    const g = this.ctx;
+    const q = this.toScreen(u.link!.from);
+    const d = Math.hypot(p.x - q.x, p.y - q.y);
+    if (d < 6) return;
+    const stop = Math.max(0, d - size * 0.55) / d;
+    const ex = q.x + (p.x - q.x) * stop;
+    const ey = q.y + (p.y - q.y) * stop;
+    const col = this.colorOf(u);
+    g.save();
+    g.strokeStyle = 'rgba(255,255,255,0.75)';
+    g.lineWidth = 3.5;
+    g.beginPath();
+    g.moveTo(q.x, q.y);
+    g.lineTo(ex, ey);
+    g.stroke();
+    g.strokeStyle = col;
+    g.lineWidth = 1.5;
+    g.setLineDash([5, 4]);
+    g.stroke();
+    g.setLineDash([]);
+    g.beginPath();
+    g.arc(q.x, q.y, 2.8, 0, Math.PI * 2);
+    g.fillStyle = col;
+    g.fill();
+    g.restore();
+  }
+
+  /** Small rounded tag (e.g. "from 1 Pl · 1+2") under a detached element's symbol. */
+  private tagPill(text: string, x: number, y: number, align: 'left' | 'center', col: string): void {
+    const g = this.ctx;
+    g.save();
+    g.font = `700 10px Bahnschrift, 'Arial Narrow', Arial, sans-serif`;
+    const tw = g.measureText(text).width + 12;
+    const x0 = align === 'center' ? x - tw / 2 : x;
+    g.fillStyle = 'rgba(255,255,255,0.94)';
+    g.strokeStyle = col;
+    g.lineWidth = 1;
+    g.beginPath();
+    g.roundRect(x0, y - 8, tw, 16, 8);
+    g.fill();
+    g.stroke();
+    g.fillStyle = col;
+    g.textAlign = 'left';
+    g.textBaseline = 'middle';
+    g.fillText(text, x0 + 6, y + 0.5);
+    g.restore();
+  }
+
   private drawUnits(units: UnitGlyph[]): void {
     const g = this.ctx;
-    const size = Math.max(16, Math.min(34, 18 + this.scale * 40));
-    // links and arcs first
+    const size = Math.max(16, Math.min(30, 18 + this.scale * 40));
+    const eggs = new Set(units.filter((u) => this.eggVisible(u)).map((u) => u.id));
+    // alt posns and arcs first (under everything)
     for (const u of units) {
       const p = this.toScreen(u.pos);
-      if (u.parentPos) {
+      const isEgg = eggs.has(u.id);
+      if (!u.link && u.parentPos) {
         const q = this.toScreen(u.parentPos);
         g.strokeStyle = 'rgba(11,92,173,0.45)';
         g.lineWidth = 1;
@@ -1065,12 +1698,26 @@ export class MapRenderer {
         g.moveTo(p.x, p.y);
         g.lineTo(q.x, q.y);
         g.stroke();
-        g.setLineDash([]);
-        g.strokeRect(q.x - size * 0.55, q.y - size * 0.38, size * 1.1, size * 0.76);
-        this.halo('ALT', q.x, q.y, 9, C.blue, 'center', 800);
+        if (isEgg && u.altArea && u.altArea.length >= 3) {
+          this.eggPath(u.altArea);
+          g.lineWidth = 1.8;
+          g.stroke();
+          g.setLineDash([]);
+          if (this.layers.labels || u.selected) this.halo(`ALT ${u.label}`, q.x, q.y, 10, C.blue, 'center', 800);
+        } else {
+          g.beginPath();
+          g.arc(q.x, q.y, size * 0.5, 0, Math.PI * 2);
+          g.stroke();
+          g.setLineDash([]);
+          this.halo('ALT', q.x, q.y, 9, C.blue, 'center', 800);
+        }
       }
       if (this.layers.arcs && u.arc && u.facing !== undefined) {
-        const r = Math.max(26, Math.min(140, (u.radius ?? 400) * this.scale));
+        let r = Math.max(26, Math.min(140, (u.radius ?? 400) * this.scale));
+        if (isEgg) {
+          const es = this.eggScreen(u.area!);
+          r = Math.max(36, Math.min(190, Math.max(es.maxX - es.minX, es.maxY - es.minY) * 0.95));
+        }
         const a0 = ((u.facing - 30 - 90) * Math.PI) / 180;
         const a1 = ((u.facing + 30 - 90) * Math.PI) / 180;
         g.beginPath();
@@ -1083,7 +1730,7 @@ export class MapRenderer {
         g.lineWidth = 1;
         g.stroke();
       }
-      if (u.radius && this.scale * u.radius > 20 && u.side !== 'UNK') {
+      if (!u.area && u.radius && this.scale * u.radius > 20 && u.side !== 'UNK') {
         g.beginPath();
         g.arc(p.x, p.y, u.radius * this.scale, 0, Math.PI * 2);
         g.strokeStyle = u.side === 'RED' ? 'rgba(198,40,40,0.25)' : 'rgba(11,92,173,0.25)';
@@ -1091,9 +1738,29 @@ export class MapRenderer {
         g.stroke();
       }
     }
+    // eggs: larger areas underneath smaller ones
+    const eggUnits = units.filter((u) => eggs.has(u.id)).sort((a, b) => eggSize(b) - eggSize(a));
+    for (const u of eggUnits) this.drawEgg(u);
+    // "found from" connectors over the eggs, under the point symbols
+    for (const u of units) if (u.link) this.drawLink(u, this.toScreen(u.pos), size);
     for (const u of units) {
+      if (eggs.has(u.id) && u.side !== 'RED') continue;
       const p = this.toScreen(u.pos);
-      const img = symbolImage(u.sidc, { size, label: u.label, higher: u.higher, planned: u.planned, mono: u.status === 'LOST' ? '#777' : undefined });
+      if (u.shape === 'OPLP') {
+        this.drawOpLp(u, p, size);
+        if (u.selected) {
+          g.strokeStyle = '#ffb300';
+          g.lineWidth = 3;
+          g.beginPath();
+          g.arc(p.x, p.y, size * 0.72, 0, Math.PI * 2);
+          g.stroke();
+        }
+        if (u.link?.tag && (this.layers.labels || u.selected)) this.tagPill(u.sub ? `${u.link.tag} · ${u.sub}` : u.link.tag, p.x + size * 0.42, p.y + 13, 'left', this.colorOf(u));
+        else if (u.sub && (this.layers.labels || u.selected)) this.halo(u.sub, p.x + size * 0.5, p.y + 12, 9.5, C.blue, 'left', 600);
+        if (u.strengthPct !== undefined) this.strengthBar(p.x, p.y + size * 0.5, size, u.strengthPct);
+        continue;
+      }
+      const img = symbolImage(u.sidc, { size, label: u.label, higher: u.higher, planned: u.planned && u.side !== 'RED', mono: u.status === 'LOST' ? '#777' : undefined });
       const sx = p.x - img.ax;
       const sy = p.y - img.ay;
       g.save();
@@ -1107,20 +1774,85 @@ export class MapRenderer {
         g.arc(p.x, p.y, size * 0.95, 0, Math.PI * 2);
         g.stroke();
       }
-      if (u.strengthPct !== undefined && u.side !== 'UNK') {
-        const w = size * 1.2;
-        const y = p.y + size * 0.62;
-        g.fillStyle = 'rgba(0,0,0,0.55)';
-        g.fillRect(p.x - w / 2 - 1, y - 1, w + 2, 6);
-        const pct = Math.max(0, Math.min(100, u.strengthPct));
-        g.fillStyle = pct > 66 ? '#43a047' : pct > 33 ? '#fbc02d' : '#e53935';
-        g.fillRect(p.x - w / 2, y, (w * pct) / 100, 4);
-      }
+      const subY = p.y + size * 0.62 + (u.strengthPct !== undefined ? 14 : 6);
+      if (u.link?.tag && (this.layers.labels || u.selected)) this.tagPill(u.sub ? `${u.link.tag} · ${u.sub}` : u.link.tag, p.x, subY + 3, 'center', this.colorOf(u));
+      else if (u.sub && (this.layers.labels || u.selected)) this.halo(u.sub, p.x, subY, 9.5, this.colorOf(u), 'center', 600);
+      if (u.strengthPct !== undefined && u.side !== 'UNK') this.strengthBar(p.x, p.y + size * 0.62, size, u.strengthPct);
       if (u.status === 'ASSAULT' || u.status === 'WITHDRAW') {
         this.halo(u.status === 'ASSAULT' ? 'ASLT' : 'WDR', p.x + size * 0.8, p.y - size * 0.6, 10, u.side === 'RED' ? C.enemy : C.blue, 'left', 800);
       }
       if (u.stale) this.halo('?', p.x + size * 0.7, p.y + size * 0.1, 13, '#555', 'left', 800);
     }
+    for (const u of eggUnits) this.drawEggLabels(u);
+  }
+
+  private strengthBar(x: number, y: number, size: number, strengthPct: number): void {
+    const g = this.ctx;
+    const w = size * 1.2;
+    g.fillStyle = 'rgba(0,0,0,0.55)';
+    g.fillRect(x - w / 2 - 1, y - 1, w + 2, 6);
+    const pct = Math.max(0, Math.min(100, strengthPct));
+    g.fillStyle = pct > 66 ? '#43a047' : pct > 33 ? '#fbc02d' : '#e53935';
+    g.fillRect(x - w / 2, y, (w * pct) / 100, 4);
+  }
+
+  private drawHandles(hs: NonNullable<MapScene['handles']>): void {
+    const g = this.ctx;
+    for (const h of hs) {
+      const p = this.toScreen(h.p);
+      g.save();
+      g.lineWidth = 1.6;
+      g.strokeStyle = '#0d1a26';
+      g.fillStyle = h.hot ? '#ffb300' : '#ffffff';
+      g.beginPath();
+      if (h.kind === 'vertex') g.rect(p.x - 4.5, p.y - 4.5, 9, 9);
+      else if (h.kind === 'mid') g.arc(p.x, p.y, 5, 0, Math.PI * 2);
+      else if (h.kind === 'resize') g.arc(p.x, p.y, 5.5, 0, Math.PI * 2);
+      else if (h.kind === 'radius') {
+        g.moveTo(p.x, p.y - 6);
+        g.lineTo(p.x + 6, p.y);
+        g.lineTo(p.x, p.y + 6);
+        g.lineTo(p.x - 6, p.y);
+        g.closePath();
+      } else g.arc(p.x, p.y, 7, 0, Math.PI * 2);
+      g.globalAlpha = h.kind === 'mid' && !h.hot ? 0.8 : 1;
+      g.fill();
+      g.stroke();
+      g.globalAlpha = 1;
+      if (h.kind === 'mid') {
+        g.beginPath();
+        g.moveTo(p.x - 2.6, p.y);
+        g.lineTo(p.x + 2.6, p.y);
+        g.moveTo(p.x, p.y - 2.6);
+        g.lineTo(p.x, p.y + 2.6);
+        g.stroke();
+      } else if (h.kind === 'rotate') {
+        g.beginPath();
+        g.arc(p.x, p.y, 3.6, -Math.PI * 0.9, Math.PI * 0.4);
+        g.stroke();
+      } else if (h.kind === 'resize') {
+        g.beginPath();
+        g.arc(p.x, p.y, 1.8, 0, Math.PI * 2);
+        g.fillStyle = '#0d1a26';
+        g.fill();
+      }
+      g.restore();
+    }
+  }
+
+  private drawBox(b: { a: Vec; b: Vec }): void {
+    const g = this.ctx;
+    const a = this.toScreen(b.a);
+    const c = this.toScreen(b.b);
+    const x = Math.min(a.x, c.x);
+    const y = Math.min(a.y, c.y);
+    g.fillStyle = 'rgba(255,179,0,0.08)';
+    g.fillRect(x, y, Math.abs(c.x - a.x), Math.abs(c.y - a.y));
+    g.strokeStyle = '#ffb300';
+    g.lineWidth = 1.5;
+    g.setLineDash([5, 4]);
+    g.strokeRect(x, y, Math.abs(c.x - a.x), Math.abs(c.y - a.y));
+    g.setLineDash([]);
   }
 
   private dprSym(): number {
@@ -1202,12 +1934,45 @@ export class MapRenderer {
       g.setLineDash([]);
       return;
     }
-    this.path(d.pts, d.kind === 'KILL_AREA');
+    if (d.kind === 'CIRCLE') {
+      if (d.pts.length < 2) return;
+      const a = this.toScreen(d.pts[0]);
+      const b = this.toScreen(d.pts[1]);
+      g.beginPath();
+      g.ellipse((a.x + b.x) / 2, (a.y + b.y) / 2, Math.abs(b.x - a.x) / 2, Math.abs(b.y - a.y) / 2, 0, 0, Math.PI * 2);
+      g.fillStyle = 'rgba(255,179,0,0.08)';
+      g.fill();
+      g.strokeStyle = '#ffb300';
+      g.lineWidth = 2.5;
+      g.setLineDash([6, 4]);
+      g.stroke();
+      g.setLineDash([]);
+      return;
+    }
+    const closed = d.closed ?? (d.kind === 'KILL_AREA' || d.kind === 'AREA');
+    this.path(d.pts, closed);
+    if (closed && d.pts.length > 2) {
+      g.fillStyle = 'rgba(255,179,0,0.08)';
+      g.fill();
+    }
     g.strokeStyle = '#ffb300';
     g.lineWidth = 2.5;
-    g.setLineDash([6, 4]);
+    g.lineJoin = 'round';
+    g.lineCap = 'round';
+    if (d.kind !== 'FREEHAND') g.setLineDash([6, 4]);
     g.stroke();
     g.setLineDash([]);
+    if (d.kind === 'FREEHAND') {
+      if (closed) {
+        const p = this.toScreen(d.pts[0]);
+        g.beginPath();
+        g.arc(p.x, p.y, 7, 0, Math.PI * 2);
+        g.strokeStyle = '#ffb300';
+        g.lineWidth = 2;
+        g.stroke();
+      }
+      return;
+    }
     for (const q of d.pts) {
       const p = this.toScreen(q);
       g.fillStyle = '#ffb300';
@@ -1301,37 +2066,94 @@ export class MapRenderer {
         best = u;
       }
     }
+    if (best) return best;
+    // inside a goose egg: the smallest egg wins
+    const w = this.toWorld(sx, sy);
+    let ba = Infinity;
+    for (const u of units) {
+      if (!u.area || u.area.length < 3 || !this.eggVisible(u)) continue;
+      const a = eggSize(u);
+      if (a < ba && inPoly(w, sampleClosed(u.area, 4))) {
+        ba = a;
+        best = u;
+      }
+    }
     return best;
   }
 
   graphicAt(sx: number, sy: number): PlanGraphic | undefined {
     const w = this.toWorld(sx, sy);
-    const tol = 12 / this.scale;
-    let best: PlanGraphic | undefined;
-    let bd = tol;
-    for (const gr of this.scene.graphics) {
-      let d: number;
-      if (gr.kind === 'DF' || gr.kind === 'QC_AREA' || gr.kind === 'CPEN' || gr.kind === 'NOTE') {
-        const r = gr.kind === 'CPEN' || gr.kind === 'NOTE' ? 30 : gr.props.radius ?? 150;
-        d = Math.max(0, dist(w, gr.pts[0]) - Math.max(r, 12 / this.scale));
-      } else {
-        const pts = gr.kind === 'KILL_AREA' ? [...gr.pts, gr.pts[0]] : gr.pts;
-        d = Infinity;
-        for (let i = 1; i < pts.length; i++) {
-          const a = pts[i - 1];
-          const b = pts[i];
-          const ab = sub(b, a);
-          const l2 = ab.x * ab.x + ab.y * ab.y;
-          const tt = l2 ? Math.max(0, Math.min(1, ((w.x - a.x) * ab.x + (w.y - a.y) * ab.y) / l2)) : 0;
-          d = Math.min(d, dist(w, { x: a.x + ab.x * tt, y: a.y + ab.y * tt }));
-        }
-      }
-      if (d < bd) {
-        bd = d;
-        best = gr;
-      }
-    }
-    return best;
+    return graphicHit(this.scene.graphics, w, 1 / this.scale);
   }
 }
 
+const POINT_KINDS = new Set(['DF', 'QC_AREA', 'CPEN', 'NOTE', 'TEXT', 'SYMBOL', 'TRP']);
+
+/** Distance (m) from w to a graphic, 0 inside closed areas (shared by the renderer and the planner). */
+export function graphicDistance(gr: PlanGraphic, w: Vec, mPerPx: number): number {
+  if (!gr.pts.length) return Infinity;
+  if (POINT_KINDS.has(gr.kind) || gr.pts.length === 1) {
+    const d = dist(w, gr.pts[0]);
+    if (gr.kind === 'DF' || gr.kind === 'QC_AREA') {
+      // ring or centre (the interior stays clickable for what lies underneath); radius as drawn
+      const r = gr.kind === 'DF' ? Math.max(9 * mPerPx, Math.min(80 * mPerPx, gr.props.radius ?? 150)) : Math.max(14 * mPerPx, Math.min(400 * mPerPx, gr.props.radius ?? 600));
+      return Math.abs(d - r) < 8 * mPerPx || d < 14 * mPerPx ? 0 : Math.min(Math.abs(d - r), d);
+    }
+    const r = gr.kind === 'CPEN' ? 28 * mPerPx : 16 * mPerPx;
+    return Math.max(0, d - Math.max(r, 12 * mPerPx));
+  }
+  const closed = gr.kind === 'KILL_AREA' || gr.kind === 'AREA' || (gr.kind === 'FREE' && !!gr.props.closed);
+  const smooth = gr.kind === 'FREE' || gr.kind === 'AREA' || gr.kind === 'ARROW' ? gr.props.smooth !== false : !!gr.props.smooth;
+  const line = smooth && gr.pts.length >= 3 ? (closed ? sampleClosed(gr.pts, 6) : sampleOpen(gr.pts, 6)) : gr.pts;
+  const pts = closed ? [...line, line[0]] : line;
+  let d = Infinity;
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1];
+    const b = pts[i];
+    const ab = sub(b, a);
+    const l2 = ab.x * ab.x + ab.y * ab.y;
+    const tt = l2 ? Math.max(0, Math.min(1, ((w.x - a.x) * ab.x + (w.y - a.y) * ab.y) / l2)) : 0;
+    d = Math.min(d, dist(w, { x: a.x + ab.x * tt, y: a.y + ab.y * tt }));
+  }
+  if (closed && d > 6 * mPerPx && inPoly(w, line)) return 6 * mPerPx;
+  return d;
+}
+
+function inPoly(p: Vec, poly: Vec[]): boolean {
+  let ins = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[i];
+    const b = poly[j];
+    if (a.y > p.y !== b.y > p.y && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y + 1e-12) + a.x) ins = !ins;
+  }
+  return ins;
+}
+
+/** Nearest graphic within 12 px of w. */
+export function graphicHit(graphics: PlanGraphic[], w: Vec, mPerPx: number): PlanGraphic | undefined {
+  let best: PlanGraphic | undefined;
+  let bd = 12 * mPerPx;
+  for (const gr of graphics) {
+    const d = graphicDistance(gr, w, mPerPx);
+    if (d < bd) {
+      bd = d;
+      best = gr;
+    }
+  }
+  return best;
+}
+
+function eggSize(u: UnitGlyph): number {
+  if (!u.area) return 0;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const p of u.area) {
+    minX = Math.min(minX, p.x);
+    maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y);
+    maxY = Math.max(maxY, p.y);
+  }
+  return (maxX - minX) * (maxY - minY);
+}

@@ -68,6 +68,11 @@ export interface Layers {
   relief: boolean;
   /** Scale bar, north arrow, grid numbers, frame. */
   decor: boolean;
+  /**
+   * Relief, background and cartographic features. false = transparent overlay of plan/battle
+   * graphics only (used to drape graphics over the 3D terrain). Absent = true.
+   */
+  terrain?: boolean;
 }
 
 const PALETTE = {
@@ -129,8 +134,9 @@ export class MapRenderer {
   }
 
   // ------------------------------------------------------------------ view
-  resize(w: number, h: number): void {
-    this.dpr = Math.min(3, window.devicePixelRatio || 1);
+  /** Resize the drawing surface (CSS px). `dpr` overrides the device pixel ratio (offscreen rendering). */
+  resize(w: number, h: number, dpr?: number): void {
+    this.dpr = dpr ?? Math.min(3, (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
     this.w = w;
     this.h = h;
     this.canvas.width = Math.round(w * this.dpr);
@@ -217,24 +223,27 @@ export class MapRenderer {
     const g = this.ctx;
     const sc = this.scene;
     const night = !!sc.night;
+    const terrain = this.layers.terrain !== false;
     g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-    g.fillStyle = C.bg;
-    g.fillRect(0, 0, this.w, this.h);
     const tl = this.toScreen({ x: 0, y: this.s.terrain.height });
     const br = this.toScreen({ x: this.s.terrain.width, y: 0 });
-    // relief
-    if (night) this.baseNight = this.baseNight ?? this.buildBase(true);
-    else this.base = this.base ?? this.buildBase(false);
-    g.save();
-    g.imageSmoothingEnabled = true;
-    g.imageSmoothingQuality = 'high';
-    g.drawImage((night ? this.baseNight : this.base)!, tl.x, tl.y, br.x - tl.x, br.y - tl.y);
-    g.restore();
+    if (terrain) {
+      g.fillStyle = C.bg;
+      g.fillRect(0, 0, this.w, this.h);
+      // relief
+      if (night) this.baseNight = this.baseNight ?? this.buildBase(true);
+      else this.base = this.base ?? this.buildBase(false);
+      g.save();
+      g.imageSmoothingEnabled = true;
+      g.imageSmoothingQuality = 'high';
+      g.drawImage((night ? this.baseNight : this.base)!, tl.x, tl.y, br.x - tl.x, br.y - tl.y);
+      g.restore();
+    } else g.clearRect(0, 0, this.w, this.h);
     g.save();
     g.beginPath();
     g.rect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
     g.clip();
-    this.drawFeatures(night);
+    if (terrain) this.drawFeatures(night);
     if (this.layers.grid) this.drawGrid(night);
     if (sc.fog) this.drawFog(sc.fog);
     if (this.layers.aor) this.drawAor();

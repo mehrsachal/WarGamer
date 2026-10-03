@@ -5,8 +5,28 @@ import type { PlanGraphic, Scenario } from '../core/types';
 import { type Layers, type MapScene, MapRenderer, type UnitGlyph } from '../render/mapRenderer';
 import { terrainFor } from '../terrain/terrain';
 
+/** A pointer sample in world and screen space, shared by the 2D and 3D map views. */
+export interface MapPointer {
+  /** World position (m). */
+  w: Vec;
+  /** Screen position relative to the map element (CSS px). */
+  sx: number;
+  sy: number;
+  /** Metres per CSS pixel at this point (for hit tolerances such as vertex handles). */
+  mPerPx: number;
+  button: number;
+  shift: boolean;
+  ctrl: boolean;
+  alt: boolean;
+}
+
+export interface MapHit {
+  unit?: UnitGlyph;
+  graphic?: PlanGraphic;
+}
+
 export interface MapEvents {
-  onClick?: (w: Vec, hit: { unit?: UnitGlyph; graphic?: PlanGraphic }, e: PointerEvent) => void;
+  onClick?: (w: Vec, hit: MapHit, e: PointerEvent) => void;
   onDblClick?: (w: Vec) => void;
   onMove?: (w: Vec) => void;
   /** Return true to start dragging this unit. */
@@ -14,6 +34,18 @@ export interface MapEvents {
   onDrag?: (id: string, w: Vec) => void;
   onDragEnd?: (id: string, w: Vec) => void;
   onContext?: (w: Vec) => void;
+  /**
+   * Low-level gesture stream for drawing/editing tools (freehand, vertex drag, resize handles).
+   * Return true to capture the gesture: the view then sends onPointerMove/onPointerUp for it and
+   * does not pan, unit-drag or fire onClick.
+   */
+  onPointerDown?: (p: MapPointer, hit: MapHit) => boolean | void;
+  /** Captured gesture moves (only after onPointerDown returned true). */
+  onPointerMove?: (p: MapPointer) => void;
+  /** End of a captured gesture. */
+  onPointerUp?: (p: MapPointer) => void;
+  /** Hover samples (always sent, captured or not). */
+  onHover?: (p: MapPointer) => void;
 }
 
 export function MapView(p: {
@@ -91,16 +123,29 @@ export function MapView(p: {
   // pointer handling
   useEffect(() => {
     const c = cv.current!;
-    let down: { x: number; y: number; id: number; moved: boolean; drag?: string; pan: boolean } | null = null;
+    let down: { x: number; y: number; id: number; moved: boolean; drag?: string; pan: boolean; captured?: boolean } | null = null;
     const local = (e: PointerEvent | WheelEvent | MouseEvent) => {
       const b = c.getBoundingClientRect();
       return { x: e.clientX - b.left, y: e.clientY - b.top };
+    };
+    const sample = (e: PointerEvent): MapPointer => {
+      const r = rRef.current!;
+      const l = local(e);
+      return { w: r.toWorld(l.x, l.y), sx: l.x, sy: l.y, mPerPx: 1 / r.scale, button: e.button, shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey, alt: e.altKey };
     };
     const onDown = (e: PointerEvent) => {
       const r = rRef.current!;
       const l = local(e);
       if (e.button === 2) return;
       const u = r.unitAt(l.x, l.y);
+      if (ev.current?.onPointerDown) {
+        const graphic = u ? undefined : r.graphicAt(l.x, l.y);
+        if (ev.current.onPointerDown(sample(e), { unit: u, graphic }) === true) {
+          down = { x: l.x, y: l.y, id: e.pointerId, moved: false, pan: false, captured: true };
+          c.setPointerCapture(e.pointerId);
+          return;
+        }
+      }
       const drag = u && ev.current?.canDrag?.(u) ? u.id : undefined;
       down = { x: l.x, y: l.y, id: e.pointerId, moved: false, drag, pan: !drag };
       c.setPointerCapture(e.pointerId);
@@ -111,7 +156,13 @@ export function MapView(p: {
       const w = r.toWorld(l.x, l.y);
       if (p.coords !== false && r.t.inBounds(w)) setCoord(`${r.t.gridRef(w)} · ${r.t.squareRef(w)} · ${r.t.describe(w)} · ${Math.round(r.t.elevAt(w))} m`);
       ev.current?.onMove?.(w);
+      ev.current?.onHover?.(sample(e));
       if (!down) return;
+      if (down.captured) {
+        down.moved = true;
+        ev.current?.onPointerMove?.(sample(e));
+        return;
+      }
       const dx = l.x - down.x;
       const dy = l.y - down.y;
       if (!down.moved && Math.hypot(dx, dy) < 4) return;
@@ -129,6 +180,11 @@ export function MapView(p: {
       const r = rRef.current!;
       const l = local(e);
       const w = r.toWorld(l.x, l.y);
+      if (down?.captured) {
+        down = null;
+        ev.current?.onPointerUp?.(sample(e));
+        return;
+      }
       if (down && !down.moved) {
         const unit = r.unitAt(l.x, l.y);
         const graphic = unit ? undefined : r.graphicAt(l.x, l.y);

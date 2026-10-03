@@ -224,12 +224,56 @@ export interface PlacedUnit {
   facing: number;
   role: Role;
   altPos?: Vec;
-  /** Parent locality this weapon/detachment is grouped with. */
+  /** Parent locality this weapon/detachment is grouped with (also the locality an SP/LP/detachment is found from). */
   parentId?: string;
   notes?: string;
+  /**
+   * Area occupied (goose egg), as closed outline control points in world metres; drawn as a smooth
+   * closed curve. Absent = a default egg sized from the template is used.
+   */
+  area?: Vec[];
+  /** Personnel override (split elements, detachments). Absent = template strength. */
+  strength?: number;
+  /** Id of the unit this element was split (divided) from; its strength is deducted from that unit. */
+  splitFrom?: string;
+  /** Task-organisation group this unit belongs to. */
+  groupId?: string;
 }
 
-export type GraphicKind = 'FDL' | 'KILL_AREA' | 'MINEFIELD' | 'WIRE' | 'DF' | 'CATK' | 'CPEN' | 'QC_AREA' | 'PTL_ROUTE' | 'NOTE';
+/** A task-organisation grouping of placed units (e.g. "2 Pl Gp" = 2 Pl + RR det + GL). */
+export interface PlanGroup {
+  id: string;
+  label: string;
+  memberIds: string[];
+  echelon?: Echelon;
+  /** Optional outline enclosing the group (goose egg); absent = hull of the members. */
+  area?: Vec[];
+}
+
+/**
+ * Semantic kind of a graphic. The first group is read by the plan assessment; the second group is
+ * free drawing (a FREE/AREA/ARROW shape can be re-tagged to a semantic kind at any time).
+ */
+export type GraphicKind =
+  | 'FDL'
+  | 'KILL_AREA'
+  | 'MINEFIELD'
+  | 'WIRE'
+  | 'DF'
+  | 'CATK'
+  | 'CPEN'
+  | 'QC_AREA'
+  | 'PTL_ROUTE'
+  | 'NOTE'
+  | 'FREE'
+  | 'AREA'
+  | 'ARROW'
+  | 'TEXT'
+  | 'PHASE_LINE'
+  | 'BOUNDARY'
+  | 'OBSTACLE'
+  | 'TRP'
+  | 'SYMBOL';
 
 export interface PlanGraphic {
   id: string;
@@ -243,6 +287,17 @@ export interface PlanGraphic {
     unitId?: string;
     radius?: number;
     text?: string;
+    /** Free-drawing style. */
+    color?: 'BLUE' | 'RED' | 'BLACK' | 'GREEN' | 'PURPLE' | 'AMBER';
+    dash?: boolean;
+    width?: number;
+    closed?: boolean;
+    smooth?: boolean;
+    fill?: boolean;
+    /** SIDC for SYMBOL graphics (point symbols placed freely). */
+    sidc?: string;
+    /** Rotation in degrees for TEXT / SYMBOL. */
+    rot?: number;
   };
 }
 
@@ -259,11 +314,27 @@ export interface Appreciation {
 }
 
 export interface ContingencyChoice {
+  /** Primary option id (kept for compatibility; the first selected action). */
   option: string;
+  /** All selected actions (composable response). */
+  actions?: string[];
+  /** Free-text course of action / rationale in the student's own words. */
+  text?: string;
   unitId?: string;
   delayMin?: number;
 }
 export type ContingencyPlan = Record<string, ContingencyChoice>;
+
+/** A contingency the student adds themselves (trigger + response). */
+export interface CustomContingency {
+  id: string;
+  /** Trigger category from the catalogue, or 'OTHER'. */
+  trigger: string;
+  /** Situation in the student's words. */
+  situation: string;
+  actions: string[];
+  text: string;
+}
 
 export interface Plan {
   units: PlacedUnit[];
@@ -273,6 +344,8 @@ export interface Plan {
   /** QC sortie windows planned in advance (exercise minutes). */
   qcSorties: { start: number; areaId: string }[];
   updatedAt: number;
+  groups?: PlanGroup[];
+  customContingencies?: CustomContingency[];
 }
 
 // ---------------------------------------------------------------- people & exercises
@@ -308,6 +381,16 @@ export interface ExerciseSettings {
   difficulty: 'TRAINING' | 'STANDARD' | 'HARD';
   planWeight: number;
   timeLimitMin: number;
+  /** Marking configuration (flexibility). Absent = STANDARD with default weights. */
+  marking?: MarkingConfig;
+}
+
+export interface MarkingConfig {
+  strictness: 'LENIENT' | 'STANDARD' | 'STRICT';
+  /** Multipliers per rubric group (1 = default). */
+  groupWeights?: Record<string, number>;
+  /** Rubric item ids switched off by the instructor. */
+  disabled?: string[];
 }
 
 export interface Exercise {
@@ -353,6 +436,11 @@ export interface DecisionRecord {
   verdict: 'BEST' | 'ACCEPTABLE' | 'POOR' | 'WRONG';
   rationale: string;
   ref: string;
+  /** Composed actions and free text, when the response was not a single option. */
+  actions?: string[];
+  text?: string;
+  /** Short note from the AI umpire, if AI marking was used. */
+  aiNote?: string;
 }
 
 export interface WargameSummary {
@@ -382,6 +470,19 @@ export interface WargameRecord {
   units: { id: string; sidc: string; label: string; side: Side; start: number }[];
   causes: Record<Side, Record<string, number>>;
   enemyPlan?: { faa: Vec; fup: Vec; bof: Vec; faaName: string; fupName: string; bofName: string; approach: Vec[]; objectives: { pos: Vec; name: string; phase: number }[] };
+  /** LLM usage and AI-made decisions during this battle (absent when AI was off). */
+  ai?: AiRecord;
+}
+
+export interface AiRecord {
+  model: string;
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  /** Enemy-commander and radio-net decisions taken by the AI, for the AAR. */
+  events: { time: number; who: 'EN_CDR' | 'RADIO' | 'UMPIRE'; text: string }[];
+  /** AI mentor debrief text, if requested. */
+  mentor?: string;
 }
 
 export interface ReplayFrame {

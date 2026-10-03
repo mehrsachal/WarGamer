@@ -171,8 +171,14 @@ export interface PendingDecision {
 export interface DecisionInput {
   option: string;
   options?: string[];
+  /** Composed actions (superset of option/options). */
+  actions?: string[];
+  /** Free-text response in the student's words. */
+  text?: string;
   unitId?: string;
   delayMin?: number;
+  /** Where the response came from. */
+  source?: 'MODAL' | 'PREPLANNED' | 'MAP' | 'AI';
 }
 
 export type ManualOrder =

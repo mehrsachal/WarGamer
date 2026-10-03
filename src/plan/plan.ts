@@ -23,6 +23,7 @@ import { uid } from '../core/rng';
 import { dayNightHours } from '../core/time';
 import type { Approach, ContingencyPlan, Plan, PlanGraphic, PlacedUnit, Role, Scenario } from '../core/types';
 import { TEMPLATES } from '../core/units';
+import { defaultArea, isAreaUnit } from './area';
 import { REORG_CORRECT } from './contingency';
 
 export interface ResourceSlot {
@@ -399,6 +400,8 @@ export function autoPlan(s: Scenario): Plan {
     priorityOfWork: [...DOCTRINE.priorityOfWork],
     text: { aim: `To take up def within the given bdrys as far fwd as tac feasible, ready by first lt D Day.` },
   };
+  // goose eggs for the localities, sized from doctrine and oriented to their facing
+  for (const u of plan.units) if (isAreaUnit(u)) u.area = defaultArea(u);
   const sp = plan.units.find((u) => u.role === 'SP_PTL');
   plan.contingency = dsContingency(sp?.id, depth && lvl !== 'PL' ? depth.id : fwd[1]?.id);
   plan.updatedAt = Date.now();

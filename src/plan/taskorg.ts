@@ -7,7 +7,7 @@ import { dist } from '../core/geom';
 import { uid } from '../core/rng';
 import type { Plan, PlanGroup, PlacedUnit, Role } from '../core/types';
 import { TEMPLATES, type WeaponKey } from '../core/units';
-import { areaCentroid, defaultEggAxes, eggPoints, isAreaUnit, setUnitArea, unitArea } from './area';
+import { areaCentroid, areaExtentFacing, defaultEggAxes, eggPoints, isAreaUnit, setUnitArea, unitArea } from './area';
 
 /** Elements that are found (detached) from a parent locality and say so on the map. */
 export const FOUND_ROLES = new Set<Role>(['SP_PTL', 'LP', 'OP', 'SCREEN']);
@@ -194,7 +194,18 @@ export function splitUnit(plan: Plan, id: string, o: SplitOptions): PlacedUnit[]
   const out: PlacedUnit[] = [];
   const area = unitArea(u);
   const c = areaCentroid(area);
-  const mk = (templateKey: string, label: string, strength: number, pos: { x: number; y: number }, role: Role, area?: boolean): PlacedUnit => {
+  /** A detached point element is moved sideways off any element already sited there (e.g. an LP). */
+  const clear = (pos: { x: number; y: number }, point: boolean) => {
+    if (!point) return pos;
+    for (let k = 0; k < 9; k++) {
+      const side = k === 0 ? 0 : (k % 2 ? 1 : -1) * Math.ceil(k / 2) * 90;
+      const p = add(pos, lat(side));
+      if (!plan.units.some((x) => dist(x.pos, p) < 60)) return p;
+    }
+    return pos;
+  };
+  const mk = (templateKey: string, label: string, strength: number, pos0: { x: number; y: number }, role: Role, area?: boolean): PlacedUnit => {
+    const pos = clear(pos0, !(area && isAreaUnit({ templateKey, role })));
     const n: PlacedUnit = { id: uid('u'), templateKey, label, pos: { x: Math.round(pos.x), y: Math.round(pos.y) }, facing: u.facing, role, splitFrom: u.id, strength, groupId: u.groupId };
     if (role === 'SP_PTL' || role === 'LP' || role === 'OP' || role === 'SCREEN') n.parentId = u.id;
     if (area && isAreaUnit(n)) {
@@ -216,7 +227,8 @@ export function splitUnit(plan: Plan, id: string, o: SplitOptions): PlacedUnit[]
   };
   const child = CHILD_TEMPLATE[u.templateKey];
   const childT = child ? TEMPLATES[child] : undefined;
-  const ax = defaultEggAxes(u.templateKey);
+  // spread the sub-elements over the locality as actually drawn (it may have been resized)
+  const ax = isAreaUnit(u) ? areaExtentFacing(area, u.facing) : defaultEggAxes(u.templateKey);
   const elName = t?.elementName ?? 'Elm';
   const existing = plan.units.filter((x) => x.splitFrom === u.id && x.templateKey === child).length;
   if (o.kind === 'ELEMENTS' && child && childT) {

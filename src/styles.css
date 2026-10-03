@@ -284,3 +284,9 @@ table.tbl { width: 100%; border-collapse: collapse; }
 .s2-shapeic.pl { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 22 14'%3E%3Cpath d='M1 9h20' stroke='%23111' stroke-width='1.8'/%3E%3Ctext x='11' y='6' font-size='5.5' font-weight='700' text-anchor='middle' fill='%23111' font-family='Arial'%3EPL%3C/text%3E%3C/svg%3E"); }
 .s2-shapeic.bdry { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 22 14'%3E%3Cpath d='M1 9h20' stroke='%23111' stroke-width='3'/%3E%3Ccircle cx='8' cy='4' r='1.3' fill='%23111'/%3E%3Ccircle cx='11' cy='4' r='1.3' fill='%23111'/%3E%3Ccircle cx='14' cy='4' r='1.3' fill='%23111'/%3E%3C/svg%3E"); }
 .s2-props label.field > span, .s2-foundby > span { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.s2-eggicon { width: 46px; height: 40px; flex: none; }
+.s2-eggicon ellipse { fill: rgba(74, 163, 255, 0.16); stroke: #4aa3ff; stroke-width: 2.2; }
+.s2-eggicon path { stroke: #4aa3ff; stroke-width: 1.6; fill: none; }
+.s2-eggicon text { fill: #4aa3ff; font: 800 11px var(--font-cond); letter-spacing: 1px; }
+.s2-planner .mapwrap .hint { top: auto; bottom: 54px; max-width: calc(100% - 140px); text-align: center; }
+.s2-planner .s2-hud { bottom: 98px; }

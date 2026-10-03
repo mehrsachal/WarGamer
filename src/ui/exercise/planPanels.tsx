@@ -43,6 +43,20 @@ function Sym(p: { sidc: string; size?: number }) {
   return <img class="tosym" src={symbolSvg(p.sidc, p.size ?? 16)} alt="" />;
 }
 
+/** Goose-egg badge with the echelon indicator on top (properties header). */
+const ECH_MARK: Record<string, string> = { TEAM: '•', SEC: '••', PL: '•••', COY: '|', BN: '||', BDE: 'X' };
+function EggIcon(p: { echelon: string }) {
+  return (
+    <svg class="s2-eggicon" viewBox="0 0 48 40" aria-hidden="true">
+      <text x="24" y="10" text-anchor="middle">
+        {ECH_MARK[p.echelon] ?? ''}
+      </text>
+      <ellipse cx="24" cy="25" rx="20" ry="11" />
+      <path d="M17 20l14 10M31 20l-14 10" />
+    </svg>
+  );
+}
+
 // ---------------------------------------------------------------------------- unit
 
 export function UnitProps(x: { u: PlacedUnit; p: StepProps; edit: Edit; commit: Edit; onTool: (t: 'face' | 'alt' | 'drawArea') => void; onDelete: () => void; onSelect: (id: string) => void }) {
@@ -74,11 +88,11 @@ export function UnitProps(x: { u: PlacedUnit; p: StepProps; edit: Edit; commit: 
   return (
     <div class="sect col s2-props">
       <div class="row">
-        {u.role === 'LP' || u.templateKey === 'LP' ? <span class="s2-oplp">▲</span> : <img src={symbolSvg(t.sidc, 26, u.label)} alt="" style={{ height: 40 }} />}
+        {u.role === 'LP' || u.templateKey === 'LP' ? <span class="s2-oplp">▲</span> : egg ? <EggIcon echelon={t.echelon} /> : <img src={symbolSvg(t.sidc, 26)} alt="" style={{ height: 40 }} />}
         <div class="grow">
           <b>{u.label}</b>
           <div class="muted small">
-            {t.name}
+            {u.role === 'OP' && u.templateKey === 'LP' ? 'Observation Post' : t.name}
             {egg ? ' · area (goose egg)' : ''}
           </div>
         </div>

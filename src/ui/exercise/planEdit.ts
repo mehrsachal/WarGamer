@@ -131,9 +131,14 @@ export function handlesFor(plan: Plan, sel: Selection, mPerPx: number): Handle[]
     const u = plan.units.find((x) => x.id === sel.units[0]);
     if (!u || !isAreaUnit(u)) return out;
     const a = unitArea(u);
-    a.forEach((p, i) => out.push({ p, kind: 'vertex', target: 'unit', id: u.id, i }));
-    a.forEach((p, i) => out.push({ p: mid(a, i, true), kind: 'mid', target: 'unit', id: u.id, i }));
     const f = areaFrame(a);
+    // a small egg on screen gets only resize / rotate handles (zoom in to reshape its outline)
+    const reshape = (2 * Math.max(f.a, f.b)) / mPerPx >= 64;
+    if (reshape) a.forEach((p, i) => out.push({ p, kind: 'vertex', target: 'unit', id: u.id, i }));
+    // insert points only where the segment is long enough on screen to tell them from the vertices
+    a.forEach((p, i) => {
+      if (reshape && dist(p, a[(i + 1) % a.length]) > 34 * mPerPx) out.push({ p: mid(a, i, true), kind: 'mid', target: 'unit', id: u.id, i });
+    });
     for (const sign of [1, -1]) {
       // resize handles sit just outside the outline (clear of the vertex handles)
       out.push({ p: add(f.c, scaleV(f.major, (f.a + 14 * mPerPx) * sign)), kind: 'resize', target: 'unit', id: u.id, axis: 'major', sign });
@@ -155,7 +160,9 @@ export function handlesFor(plan: Plan, sel: Selection, mPerPx: number): Handle[]
   const closed = shapeOf(g) === 'area';
   g.pts.forEach((p, i) => out.push({ p, kind: 'vertex', target: 'graphic', id: g.id, i }));
   const nMid = closed ? g.pts.length : g.pts.length - 1;
-  if (g.kind !== 'MINEFIELD' || g.pts.length > 1) for (let i = 0; i < nMid; i++) out.push({ p: mid(g.pts, i, closed), kind: 'mid', target: 'graphic', id: g.id, i });
+  for (let i = 0; i < nMid; i++) {
+    if (dist(g.pts[i], g.pts[closed ? (i + 1) % g.pts.length : i + 1]) > 34 * mPerPx) out.push({ p: mid(g.pts, i, closed), kind: 'mid', target: 'graphic', id: g.id, i });
+  }
   return out;
 }
 

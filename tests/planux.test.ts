@@ -258,3 +258,18 @@ test('sim: a larger hand-drawn area widens the footprint within bounds', () => {
   const r = e.byId.get(pl.id)!.radius;
   assert.ok(r > TEMPLATES.RIFLE_PL.radius * 1.3 && r <= TEMPLATES.RIFLE_PL.radius * 2, `radius ${r}`);
 });
+
+test('task org: a second detachment is sited clear of the first; secs spread over a resized locality', () => {
+  const plan = planOf([unit({ id: 'pl', templateKey: 'RIFLE_PL', label: '1 Pl' })]);
+  const [lp] = splitUnit(plan, 'pl', { kind: 'MEN', men: 3, role: 'LP' });
+  const [op] = splitUnit(plan, 'pl', { kind: 'MEN', men: 3, role: 'OP' });
+  assert.ok(dist(lp.pos, op.pos) >= 60, 'OP not stacked on the LP');
+  // widen the pl egg to twice its frontage: the secs follow the drawn outline
+  const pl = plan.units[0];
+  const a0 = unitArea(pl);
+  setUnitArea(pl, scaleAlong(a0, areaCentroid(a0), { x: 1, y: 0 }, 2, 1));
+  const secs = splitUnit(plan, 'pl', { kind: 'ELEMENTS' });
+  const spread = Math.abs(secs[0].pos.x - secs[1].pos.x);
+  const { front } = defaultEggAxes('RIFLE_PL');
+  assert.ok(spread > front * 2.0, `secs spread ${spread} m over a ${front * 4} m frontage`);
+});

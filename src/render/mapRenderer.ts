@@ -1528,6 +1528,10 @@ export class MapRenderer {
       this.halo(u.sub, es.c.x, by + 5, 10, col, 'center', 600);
       by += 12;
     }
+    if (u.link?.tag && !lost && (this.layers.labels || u.selected)) {
+      this.tagPill(u.link.tag, es.c.x, by + 9, 'center', col);
+      by += 18;
+    }
     if (u.strengthPct !== undefined && u.side !== 'UNK' && !lost) {
       const w = Math.min(46, Math.max(26, wpx * 0.4));
       g.fillStyle = 'rgba(0,0,0,0.5)';
@@ -1594,30 +1598,33 @@ export class MapRenderer {
     g.arc(q.x, q.y, 2.8, 0, Math.PI * 2);
     g.fillStyle = col;
     g.fill();
-    const tag = u.link!.tag;
-    if (tag && d > 46 && (this.layers.labels || u.selected)) {
-      const mx = (q.x + ex) / 2;
-      const my = (q.y + ey) / 2;
-      g.font = `700 10px Bahnschrift, 'Arial Narrow', Arial, sans-serif`;
-      const tw = g.measureText(tag).width + 12;
-      g.fillStyle = 'rgba(255,255,255,0.94)';
-      g.strokeStyle = col;
-      g.lineWidth = 1;
-      g.beginPath();
-      g.roundRect(mx - tw / 2, my - 8, tw, 16, 8);
-      g.fill();
-      g.stroke();
-      g.fillStyle = col;
-      g.textAlign = 'center';
-      g.textBaseline = 'middle';
-      g.fillText(tag, mx, my + 0.5);
-    }
+    g.restore();
+  }
+
+  /** Small rounded tag (e.g. "from 1 Pl · 1+2") under a detached element's symbol. */
+  private tagPill(text: string, x: number, y: number, align: 'left' | 'center', col: string): void {
+    const g = this.ctx;
+    g.save();
+    g.font = `700 10px Bahnschrift, 'Arial Narrow', Arial, sans-serif`;
+    const tw = g.measureText(text).width + 12;
+    const x0 = align === 'center' ? x - tw / 2 : x;
+    g.fillStyle = 'rgba(255,255,255,0.94)';
+    g.strokeStyle = col;
+    g.lineWidth = 1;
+    g.beginPath();
+    g.roundRect(x0, y - 8, tw, 16, 8);
+    g.fill();
+    g.stroke();
+    g.fillStyle = col;
+    g.textAlign = 'left';
+    g.textBaseline = 'middle';
+    g.fillText(text, x0 + 6, y + 0.5);
     g.restore();
   }
 
   private drawUnits(units: UnitGlyph[]): void {
     const g = this.ctx;
-    const size = Math.max(16, Math.min(34, 18 + this.scale * 40));
+    const size = Math.max(16, Math.min(30, 18 + this.scale * 40));
     const eggs = new Set(units.filter((u) => this.eggVisible(u)).map((u) => u.id));
     // alt posns and arcs first (under everything)
     for (const u of units) {
@@ -1700,7 +1707,8 @@ export class MapRenderer {
           g.arc(p.x, p.y, size * 0.72, 0, Math.PI * 2);
           g.stroke();
         }
-        if (u.sub && (this.layers.labels || u.selected)) this.halo(u.sub, p.x + size * 0.5, p.y + 12, 9.5, C.blue, 'left', 600);
+        if (u.link?.tag && (this.layers.labels || u.selected)) this.tagPill(u.sub ? `${u.link.tag} · ${u.sub}` : u.link.tag, p.x + size * 0.42, p.y + 13, 'left', this.colorOf(u));
+        else if (u.sub && (this.layers.labels || u.selected)) this.halo(u.sub, p.x + size * 0.5, p.y + 12, 9.5, C.blue, 'left', 600);
         if (u.strengthPct !== undefined) this.strengthBar(p.x, p.y + size * 0.5, size, u.strengthPct);
         continue;
       }
@@ -1718,7 +1726,9 @@ export class MapRenderer {
         g.arc(p.x, p.y, size * 0.95, 0, Math.PI * 2);
         g.stroke();
       }
-      if (u.sub && (this.layers.labels || u.selected)) this.halo(u.sub, p.x, p.y + size * 0.62 + (u.strengthPct !== undefined ? 14 : 6), 9.5, this.colorOf(u), 'center', 600);
+      const subY = p.y + size * 0.62 + (u.strengthPct !== undefined ? 14 : 6);
+      if (u.link?.tag && (this.layers.labels || u.selected)) this.tagPill(u.sub ? `${u.link.tag} · ${u.sub}` : u.link.tag, p.x, subY + 3, 'center', this.colorOf(u));
+      else if (u.sub && (this.layers.labels || u.selected)) this.halo(u.sub, p.x, subY, 9.5, this.colorOf(u), 'center', 600);
       if (u.strengthPct !== undefined && u.side !== 'UNK') this.strengthBar(p.x, p.y + size * 0.62, size, u.strengthPct);
       if (u.status === 'ASSAULT' || u.status === 'WITHDRAW') {
         this.halo(u.status === 'ASSAULT' ? 'ASLT' : 'WDR', p.x + size * 0.8, p.y - size * 0.6, 10, u.side === 'RED' ? C.enemy : C.blue, 'left', 800);

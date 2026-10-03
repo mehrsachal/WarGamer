@@ -166,6 +166,14 @@ export function Planner(p: StepProps) {
       if (v.groups) pl.groups = v.groups;
       else delete pl.groups;
     });
+    // keep whatever is still there selected (undoing a reshape keeps the item in hand)
+    const uids = new Set(v.units.map((u) => u.id));
+    const gids = new Set(v.graphics.map((g) => g.id));
+    setSel((cur) => ({
+      units: cur.units.filter((id) => uids.has(id)),
+      graphics: cur.graphics.filter((id) => gids.has(id)),
+      group: cur.group && v.groups?.some((g) => g.id === cur.group) ? cur.group : undefined,
+    }));
   };
   const undo = () => {
     const h = hist.current;
@@ -173,7 +181,6 @@ export function Planner(p: StepProps) {
     if (!prev || readOnly) return;
     h.future.push(snapOf(planRef.current));
     restore(prev);
-    setSel(EMPTY_SEL);
     setHistTick((x) => x + 1);
   };
   const redo = () => {
@@ -182,7 +189,6 @@ export function Planner(p: StepProps) {
     if (!next || readOnly) return;
     h.past.push(snapOf(planRef.current));
     restore(next);
-    setSel(EMPTY_SEL);
     setHistTick((x) => x + 1);
   };
 

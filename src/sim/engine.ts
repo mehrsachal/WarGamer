@@ -21,7 +21,7 @@ import { terrainFor, type TerrainModel } from '../terrain/terrain';
 import { runBlue } from './blue';
 import { resolveCloseCombat, resolveDirectFire } from './combat';
 import { resolveFires, runQc, runUcav } from './fires';
-import { applyDecision, checkInjects } from './injects';
+import { applyDecision, beginMapResponse, checkInjects, mapResponseInput, noteManualOrder } from './injects';
 import { buildRed, runRed } from './red';
 import { reportContact, runSensors } from './sensors';
 import type {
@@ -387,9 +387,18 @@ export class Engine {
     }
   }
 
+  /**
+   * The pre-planned response to a decision: the contingency plan (or the student's own
+   * contingency) — else the sub-unit SOP (the sound quick pick), which is marked down for a
+   * core situation and not marked for an inject-only one.
+   */
   preplannedInput(p: PendingDecision): DecisionInput {
-    if (p.multi) return { option: p.preplanned ?? '', options: (p.preplanned ?? '').split(',').filter(Boolean) };
-    return { option: p.preplanned ?? p.options[0].id, unitId: p.preplannedUnit, delayMin: p.preplannedDelay };
+    if (p.preplannedActions?.length || p.preplannedText?.trim()) {
+      return { option: p.preplanned ?? '', actions: p.preplannedActions ?? [], text: p.preplannedText, unitId: p.preplannedUnit, delayMin: p.preplannedDelay, dfId: p.preplannedDf, source: 'PREPLANNED' };
+    }
+    if (p.multi) return { option: p.preplanned ?? '', options: (p.preplanned ?? '').split(',').filter(Boolean), source: p.preplanned ? 'PREPLANNED' : 'SOP' };
+    const opt = p.preplanned ?? p.options[0]?.id ?? '';
+    return { option: opt, unitId: p.preplannedUnit, delayMin: p.preplannedDelay, source: p.preplanned ? 'PREPLANNED' : 'SOP' };
   }
 
   decide(input: DecisionInput): void {
@@ -399,8 +408,20 @@ export class Engine {
     applyDecision(this, p, input);
   }
 
+  /** Close the decision card to act on the map; the battle stays paused until resumeFromMap(). */
+  actOnMap(): void {
+    beginMapResponse(this);
+  }
+
+  /** End a decision taken on the map: the orders given since actOnMap() (plus optional text) are the response. */
+  resumeFromMap(text?: string): void {
+    if (this.pending) this.decide(mapResponseInput(this, text));
+  }
+
   order(o: ManualOrder): string {
-    return executeOrder(this, o);
+    const msg = executeOrder(this, o);
+    noteManualOrder(this, o);
+    return msg;
   }
 
   // ------------------------------------------------------------------ movement

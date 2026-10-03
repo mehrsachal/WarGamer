@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import type { Attempt, Exercise, Scenario } from '../../core/types';
 import { assessPlan } from '../../assess/plan';
 import { autoPlan } from '../../plan/plan';
+import { CONTINGENCIES, choicePlanned } from '../../plan/contingency';
 import { db } from '../../store/db';
 import { exerciseOf, getScenario } from '../data';
 import { nav, type Session, toast } from '../kit';
@@ -80,11 +81,13 @@ export function ExerciseFlow(p: { attemptId: string; step?: string; session: Ses
     saveT.current = window.setTimeout(() => void db.put('attempts', next), 500);
   };
   const go = (st: string) => nav(`ex/${att.id}/${st}`);
+  // planning steps can be visited in any order before submission; nothing is mandatory
   const allowed = (id: string) => {
     if (id === 'war') return att.status !== 'PLANNING';
     if (id === 'debrief') return att.status === 'COMPLETE';
     return true;
   };
+  const progress = stepProgress(s, att);
   const sp: StepProps = { s, attempt: att, ex, update, readOnly, session: p.session, go };
   const demo = att.exerciseId.startsWith('demo_');
   return (
@@ -99,6 +102,7 @@ export function ExerciseFlow(p: { attemptId: string; step?: string; session: Ses
             <button key={st.id} class={`step ${st.id === step ? 'on' : ''} ${done ? 'done' : ''}`} disabled={!allowed(st.id)} onClick={() => go(st.id)}>
               <span class="n">{done ? '✓' : i + 1}</span>
               {st.label}
+              {att.status === 'PLANNING' && progress[st.id] && <span class={`step-prog ${progress[st.id].done >= progress[st.id].of ? 'full' : ''}`} title={`${progress[st.id].done} of ${progress[st.id].of} done (optional items are not credited until done)`}>{progress[st.id].done}/{progress[st.id].of}</span>}
             </button>
           );
         })}
@@ -111,10 +115,11 @@ export function ExerciseFlow(p: { attemptId: string; step?: string; session: Ses
               class="btn small olive"
               title="Fill in the DS solution (appreciation, plan and contingencies)"
               onClick={() => {
+                const ds = autoPlan(s);
                 update((a) => {
-                  a.plan = autoPlan(s);
+                  a.plan = ds;
                 });
-                toast(`DS solution loaded (plan score ${Math.round(assessPlan(s, autoPlan(s)).pct)}%).`, 'ok');
+                toast(`DS solution loaded (plan score ${Math.round(assessPlan(s, ds, { marking: ex.settings.marking }).pct)}%).`, 'ok');
               }}
             >
               Load DS solution
@@ -134,4 +139,15 @@ export function ExerciseFlow(p: { attemptId: string; step?: string; session: Ses
       </div>
     </>
   );
+}
+
+/** Light-weight completion counts shown on the step bar (guidance only — never blocking). */
+function stepProgress(s: Scenario, a: Attempt): Record<string, { done: number; of: number }> {
+  const ap = a.plan.appreciation;
+  const aprc = [ap.approachOrder.length > 0, ap.enMostLikelyApproach !== '', ap.itgOrder.length > 0, ap.fdlLine !== '', ap.bias !== '', ap.priorityOfWork.length > 0, Object.values(ap.text).some((t) => t?.trim())];
+  const conts = CONTINGENCIES.filter((d) => d.levels.includes(s.level));
+  return {
+    aprc: { done: aprc.filter(Boolean).length, of: aprc.length },
+    cont: { done: conts.filter((d) => choicePlanned(a.plan.contingency[d.key])).length, of: conts.length },
+  };
 }

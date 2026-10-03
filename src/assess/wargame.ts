@@ -3,13 +3,13 @@
 
 import { DOCTRINE, REF, gradeFor } from '../core/doctrine';
 import type { AssessmentResult, ScoreItem, WargameRecord } from '../core/types';
+import { findContingencyDef } from '../plan/contingency';
 import type { Engine } from '../sim/engine';
 import { redPlanTextFinal } from '../sim/red';
-import { summarise } from './plan';
+import { scoreItem, summarise } from './plan';
 
 function item(id: string, group: string, title: string, weight: number, score: number, detail: string, ref: string): ScoreItem {
-  const s = Math.max(0, Math.min(1, score));
-  return { id, group, title, weight, score: s, verdict: s >= 0.8 ? 'PASS' : s >= 0.4 ? 'PARTIAL' : 'FAIL', detail, ref };
+  return scoreItem(id, group, title, weight, score, detail, ref);
 }
 
 export function assessWargame(e: Engine): AssessmentResult {
@@ -28,8 +28,13 @@ export function assessWargame(e: Engine): AssessmentResult {
   // ---------------------------------------------------------------- decisions
   const g2 = 'Decisions at injects';
   for (const d of e.decisions) {
-    const pre = d.preplanned && d.preplanned !== d.option && !d.option.includes(',') ? ' (changed from your contingency plan)' : '';
-    items.push(item(`DEC_${d.key}`, g2, d.title, d.key === 'REORG' ? 2 : 3, d.score, `${e.timeStr(d.time)} — ${d.optionText}${pre}. ${d.rationale}`, d.ref));
+    // inject-only situations handled by SOPs in auto mode are not marked
+    if (d.unmarked) continue;
+    const pre = d.changed ? ' (changed from your contingency plan)' : '';
+    const how = d.source === 'MAP' ? ' [orders on the map]' : d.source === 'PREPLANNED' ? ' [contingency plan]' : d.source === 'SOP' ? ' [SOP — not pre-planned]' : '';
+    const core = findContingencyDef(d.key)?.core !== false;
+    const id = e.decisions.filter((x) => x.key === d.key).length > 1 ? `DEC_${d.key}_${d.time}` : `DEC_${d.key}`;
+    items.push(item(id, g2, d.title, d.key === 'REORG' ? 2 : core ? 3 : 2, d.score, `${e.timeStr(d.time)} — ${d.optionText}${d.text && !d.optionText.includes(d.text) ? ` · “${d.text}”` : ''}${pre}${how}. ${d.rationale}`, d.ref));
   }
   // ---------------------------------------------------------------- conduct
   const g3 = 'Conduct & fire discipline';

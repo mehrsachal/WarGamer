@@ -157,15 +157,37 @@ export interface PendingDecision {
   key: string;
   title: string;
   prompt: string;
+  /** Named quick picks (the v1 options). */
   options: DecisionOption[];
   multi?: boolean;
   preplanned?: string;
   preplannedDelay?: number;
   preplannedUnit?: string;
+  preplannedDf?: string;
   unitChoices?: { id: string; label: string }[];
   time: number;
   focus?: Vec;
   context: Record<string, unknown>;
+  /** What happened, without the time prefix (for the situation card). */
+  situation?: string;
+  /** Actions offered for a composed response (ids in plan/contingency ACTIONS). */
+  actions?: DecisionAction[];
+  /** The pre-planned response (contingency plan or own contingency). */
+  preplannedActions?: string[];
+  preplannedText?: string;
+  /** Whether the student pre-planned this situation at all. */
+  planned?: boolean;
+  /** Core (pre-planned & marked) situation, or an inject-only one. */
+  core?: boolean;
+  /** Set while the student is acting on the map (battle stays paused). */
+  onMap?: { since: number; orderIdx: number };
+}
+
+export interface DecisionAction {
+  id: string;
+  cat: 'FIRE' | 'MAN' | 'OBS' | 'C2' | 'LOG';
+  text: string;
+  param?: 'UNIT' | 'DELAY' | 'DF';
 }
 
 export interface DecisionInput {
@@ -177,8 +199,10 @@ export interface DecisionInput {
   text?: string;
   unitId?: string;
   delayMin?: number;
-  /** Where the response came from. */
-  source?: 'MODAL' | 'PREPLANNED' | 'MAP' | 'AI';
+  /** Pre-selected DF (plan graphic id) to fire for a DF action. */
+  dfId?: string;
+  /** Where the response came from ('SOP' = auto mode, nothing pre-planned: sub-unit drills). */
+  source?: 'MODAL' | 'PREPLANNED' | 'MAP' | 'AI' | 'SOP';
 }
 
 export type ManualOrder =

@@ -319,6 +319,13 @@ export interface Appreciation {
   enMostLikelyApproach: string;
   priorityOfWork: string[];
   text: Record<string, string>;
+  /**
+   * Ties / partial orderings: rank number per position of the ordered list (equal numbers =
+   * equal priority). Absent = strict order 1, 2, 3 …
+   */
+  rankTies?: Partial<Record<'approachOrder' | 'itgOrder' | 'lineOrder' | 'priorityOfWork', number[]>>;
+  /** Optional justification per choice (approachOrder, itgOrder, lineOrder, fdlLine, enMostLikelyApproach, bias, priorityOfWork). */
+  why?: Record<string, string>;
 }
 
 export interface ContingencyChoice {
@@ -330,6 +337,8 @@ export interface ContingencyChoice {
   text?: string;
   unitId?: string;
   delayMin?: number;
+  /** Pre-selected DF to fire (for DF actions). */
+  dfId?: string;
 }
 export type ContingencyPlan = Record<string, ContingencyChoice>;
 
@@ -423,6 +432,14 @@ export interface ScoreItem {
   verdict: 'PASS' | 'PARTIAL' | 'FAIL' | 'NA';
   detail: string;
   ref: string;
+  /** Performance band shown to the student (graded marking). */
+  band?: 'EXCELLENT' | 'GOOD' | 'ADEQUATE' | 'NEEDS_WORK';
+  /** What to improve (doctrinal advice), shown when the item is not excellent. */
+  tip?: string;
+  /** Automatic score before an instructor override. */
+  auto?: number;
+  /** Instructor override of this item. */
+  override?: { score: number; note?: string };
 }
 
 export interface AssessmentResult {
@@ -449,6 +466,20 @@ export interface DecisionRecord {
   text?: string;
   /** Short note from the AI umpire, if AI marking was used. */
   aiNote?: string;
+  /** Where the response came from (modal, pre-planned contingency, orders on the map, AI). */
+  source?: 'MODAL' | 'PREPLANNED' | 'MAP' | 'AI' | 'SOP';
+  /** The response differs from the student's contingency plan. */
+  changed?: boolean;
+  /** Not marked (an inject-only situation the student could not pre-plan, handled by SOP in auto mode). */
+  unmarked?: boolean;
+  /** Actions understood from the free text. */
+  understood?: string[];
+  strengths?: string[];
+  gaps?: string[];
+  /** Judge note on the free text. */
+  textNote?: string;
+  /** Judge score (0..1) of the free text used in the score. */
+  textScore?: number;
 }
 
 export interface WargameSummary {
@@ -519,6 +550,11 @@ export interface Attempt {
   grade?: string;
   remarks?: string;
   instructorAdj?: number;
+  /**
+   * Instructor per-item overrides, keyed "plan:<item id>" or "war:<item id>"; applied to the
+   * stored assessments and the final score.
+   */
+  itemOverrides?: Record<string, { score: number; note?: string }>;
 }
 
 export interface AppSettings {

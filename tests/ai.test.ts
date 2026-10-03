@@ -9,7 +9,7 @@ import { AiBattle, BattleAi, validateEnemy } from '../src/ai/battle';
 import { buildParams, callClaude, estTokens } from '../src/ai/client';
 import { encodeAar, encodeEnemy, encodeJudge, encodeRadio } from '../src/ai/encode';
 import { ENEMY_SYS, JUDGE_SYS, MENTOR_SYS, RADIO_SYS } from '../src/ai/prompts';
-import { normalise, parseRadio, radioMessage, sitrep, validateRadio } from '../src/ai/radio';
+import { normalise, parseRadio, radioMessage, sitrep, stripCallsign, validateRadio } from '../src/ai/radio';
 import { makeAiJudge, validateJudge } from '../src/ai/judge';
 import { clampWordsKeepLines, validateMentor } from '../src/ai/mentor';
 import { aiAvailable, getAiConfig, getApiKey, setAiConfig, setAiStorage, setApiKey } from '../src/ai/settings';
@@ -224,7 +224,9 @@ test('radio: AI maps free text to engine orders via enumerated ids', async () =>
   assert.equal(calls.length, 1);
   assert.equal(r.src, 'AI');
   assert.equal(e.orders.length, before + 2, 'two valid orders executed, the unknown id dropped');
-  assert.match(r.text, /Wilco/);
+  assert.match(r.text, /^Wilco/, 'the echoed "2 Pl:" call sign is dropped (the panel shows who speaks)');
+  assert.equal(stripCallsign(e, 'ETA: 5 min, out.', 'Bn'), 'ETA: 5 min, out.', 'only known call signs are stripped');
+  assert.equal(stripCallsign(e, 'FOO - Shot, over.', 'FOO'), 'Shot, over.');
   assert.equal(ai.battle.calls, 1);
   assert.ok(ai.record().events.some((x) => x.who === 'RADIO'));
   // malformed answers are rejected

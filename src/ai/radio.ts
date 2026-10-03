@@ -362,6 +362,15 @@ export function validateRadio(raw: unknown, e: Engine, maps: RadioMaps, text: st
   return { orders, decision, reply };
 }
 
+/** Drops a leading "2 Pl:" / "FOO -" the model may echo (the panel already shows who speaks). */
+export function stripCallsign(e: Engine, reply: string, who: string): string {
+  const m = /^\s*([A-Za-z0-9 /]{1,16}?)\s*[:,-]\s+(.+)$/s.exec(reply);
+  if (!m) return reply;
+  const head = squash(m[1]);
+  const known = new Set([squash(who), 'net', 'bn', 'foo', 'mfc', 'qc', 'coyhq', 'hq', ...e.units.filter((u) => u.side === 'BLUE').map((u) => squash(u.label))]);
+  return known.has(head) ? m[2].trim() : reply;
+}
+
 function execute(e: Engine, orders: ManualOrder[], decision?: DecisionInput): string[] {
   const out: string[] = [];
   for (const o of orders) out.push(e.order(o));
@@ -414,7 +423,8 @@ export async function radioMessage(e: Engine, text: string, o: { battle?: AiBatt
       const who =
         first && 'unitId' in first ? (e.byId.get(first.unitId)?.label ?? 'Net') : first && (first.type === 'DF' || first.type === 'FIRE_CONTACT') ? callsign(e, 'ARTY_OBS', 'FOO') : first && (first.type === 'AQC' || first.type === 'QC_SURV' || first.type === 'QC_RECALL') ? 'QC' : r.data.decision ? 'Bn' : 'Net';
       b.log(e.t, 'RADIO', `"${clampWords(text, 20)}" → ${ex.length ? ex.join(' ') : 'no action'} | ${r.data.reply}`);
-      return { who, text: r.data.reply || ack(ex), executed: ex, src: 'AI' };
+      const reply = stripCallsign(e, r.data.reply, who);
+      return { who, text: reply || ack(ex), executed: ex, src: 'AI' };
     }
     return { who: 'Net', text: `Say again, over. (${r.reason === 'BUDGET' ? 'AI token budget reached' : 'AI unavailable'} — try e.g. "fire DF 3", "2 Pl move to altn posn", "sitrep 1 Pl")`, executed: [], src: 'NONE' };
   }

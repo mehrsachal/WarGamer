@@ -29,6 +29,17 @@ function linkFrom(parent: PlacedUnit, parentAt: Vec | undefined, to: Vec): Vec {
   return edgePointToward(parentAt ? translatePts(a, sub(parentAt, parent.pos)) : a, to);
 }
 
+/**
+ * Map designation: an element split from a locality that is itself drawn as an egg shows only its
+ * own part ("1 Sec" inside "1 Pl"); lists and the wargame keep the full "1 Pl / 1 Sec".
+ */
+function mapLabel(u: PlacedUnit, byId: Map<string, PlacedUnit>): string {
+  const o = u.splitFrom ? byId.get(u.splitFrom) : undefined;
+  if (!o || !isAreaUnit(u) || !isAreaUnit(o)) return u.label;
+  const pre = `${o.label} / `;
+  return u.label.startsWith(pre) ? u.label.slice(pre.length) : u.label;
+}
+
 export function planUnits(plan: Plan, selected?: string | string[]): UnitGlyph[] {
   const sel = new Set(typeof selected === 'string' ? [selected] : selected ?? []);
   const book = strengthBook(plan);
@@ -45,7 +56,7 @@ export function planUnits(plan: Plan, selected?: string | string[]): UnitGlyph[]
       id: u.id,
       sidc: t?.sidc ?? 'SFGPU----------',
       pos: u.pos,
-      label: reduced ? `${u.label} (-)` : u.label,
+      label: `${mapLabel(u, byId)}${reduced ? ' (-)' : ''}`,
       facing: u.facing,
       arc: ARC_ROLES.has(u.role),
       side: 'BLUE',
@@ -136,6 +147,7 @@ export function simScene(e: Engine, opts: { selectedId?: string; fog?: MapScene[
       shape: u.role === 'LP' || u.role === 'OP' ? 'OPLP' : undefined,
       link: found ? { from: linkFrom(parentPu, parentSim.pos, u.pos) } : undefined,
       ...(pu ? eggOf(pu, u.pos) : {}),
+      ...(pu && !lost ? { label: shortSimLabel(u.label, pu, planned) } : {}),
     });
   }
   if (opts.reveal || e.opts.fog === 'OFF') {
@@ -178,6 +190,11 @@ export function simScene(e: Engine, opts: { selectedId?: string; fog?: MapScene[
   };
 }
 
+function shortSimLabel(label: string, pu: PlacedUnit, planned: Map<string, PlacedUnit>): string {
+  const full = mapLabel(pu, planned);
+  return full !== pu.label && label.startsWith(pu.label) ? full + label.slice(pu.label.length) : label;
+}
+
 export interface UnitMeta {
   id: string;
   sidc: string;
@@ -214,7 +231,7 @@ export function replayScene(plan: Plan, meta: UnitMeta[], frames: ReplayFrame[],
         id,
         sidc: m.sidc,
         pos: { x, y },
-        label: m.label,
+        label: pu && code !== 2 ? shortSimLabel(m.label, pu, planned) : m.label,
         side: m.side,
         strengthPct: pct,
         dim: code === 2,

@@ -302,6 +302,7 @@ export class MapRenderer {
     if (sc.missions) this.drawMissions(sc.missions);
     if (sc.groups) this.drawGroups(sc.groups);
     this.drawUnits(sc.units);
+    if (sc.groups) this.drawGroupLabels(sc.groups);
     if (sc.qcs) this.drawQcs(sc.qcs);
     if (sc.fires) this.drawFires(sc.fires);
     if (sc.draft) this.drawDraft(sc.draft);
@@ -1431,6 +1432,14 @@ export class MapRenderer {
       g.setLineDash([10, 6]);
       g.stroke();
       g.setLineDash([]);
+    }
+  }
+
+  /** Group name tags on top of the outline (drawn above the units). */
+  private drawGroupLabels(groups: NonNullable<MapScene['groups']>): void {
+    const g = this.ctx;
+    for (const gr of groups) {
+      if (gr.area.length < 3 || !(this.layers.labels || gr.selected)) continue;
       const es = this.eggScreen(gr.area);
       const lx = es.top.x;
       const ly = es.top.y - 2;

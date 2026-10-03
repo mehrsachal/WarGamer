@@ -135,8 +135,9 @@ export function handlesFor(plan: Plan, sel: Selection, mPerPx: number): Handle[]
     a.forEach((p, i) => out.push({ p: mid(a, i, true), kind: 'mid', target: 'unit', id: u.id, i }));
     const f = areaFrame(a);
     for (const sign of [1, -1]) {
-      out.push({ p: add(f.c, scaleV(f.major, f.a * sign)), kind: 'resize', target: 'unit', id: u.id, axis: 'major', sign });
-      out.push({ p: add(f.c, scaleV(f.minor, f.b * sign)), kind: 'resize', target: 'unit', id: u.id, axis: 'minor', sign });
+      // resize handles sit just outside the outline (clear of the vertex handles)
+      out.push({ p: add(f.c, scaleV(f.major, (f.a + 14 * mPerPx) * sign)), kind: 'resize', target: 'unit', id: u.id, axis: 'major', sign });
+      out.push({ p: add(f.c, scaleV(f.minor, (f.b + 14 * mPerPx) * sign)), kind: 'resize', target: 'unit', id: u.id, axis: 'minor', sign });
     }
     // rotate handle beyond the front (facing side) of the egg
     const fv = { x: Math.sin((u.facing * Math.PI) / 180), y: Math.cos((u.facing * Math.PI) / 180) };
@@ -316,8 +317,8 @@ export function dragHandle(plan: Plan, orig: Plan, h: Handle, start: Vec, w: Vec
       const f = areaFrame(a0);
       const ax = h.axis === 'major' ? f.major : f.minor;
       const half = h.axis === 'major' ? f.a : f.b;
-      const now = (w.x - f.c.x) * ax.x * (h.sign ?? 1) + (w.y - f.c.y) * ax.y * (h.sign ?? 1);
-      const k = Math.max(0.15, Math.min(8, now / Math.max(1, half)));
+      const proj = (q: Vec) => ((q.x - f.c.x) * ax.x + (q.y - f.c.y) * ax.y) * (h.sign ?? 1);
+      const k = Math.max(0.15, Math.min(8, (half + proj(w) - proj(start)) / Math.max(1, half)));
       setUnitArea(u, h.axis === 'major' ? scaleAlong(a0, f.c, f.major, k, 1) : scaleAlong(a0, f.c, f.major, 1, k));
       return `${h.axis === 'major' ? 'Frontage' : 'Depth'} ${Math.round(2 * half * k)} m`;
     } else if (h.kind === 'rotate') {

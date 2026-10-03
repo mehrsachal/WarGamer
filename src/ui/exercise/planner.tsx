@@ -15,6 +15,7 @@ import { Checklist, COLORS, GraphicProps, GroupProps, MultiProps, QcSorties, Sym
 import {
   EMPTY_SEL,
   type Handle,
+  type Hit,
   type PaletteItem,
   type Selection,
   boxSelect,
@@ -103,6 +104,7 @@ interface Gesture {
   sel?: Selection;
   pts?: Vec[];
   additive?: Selection;
+  toggle?: Hit;
 }
 
 export function Planner(p: StepProps) {
@@ -408,25 +410,13 @@ export function Planner(p: StepProps) {
         return true;
       }
       const hit = hitAt(pt.w, pt.mPerPx);
-      if (!hit) {
-        if (pt.shift) {
-          gesture.current = { ...g0, kind: 'box', additive: sel };
-          setBox({ a: pt.w, b: pt.w });
-          return true;
-        }
-        return false;
-      }
-      const inSel = hit.kind === 'unit' ? sel.units.includes(hit.id) : hit.kind === 'graphic' ? sel.graphics.includes(hit.id) : sel.group === hit.id;
-      if (pt.shift && hit.kind !== 'group') {
-        const ns: Selection = { units: [...sel.units], graphics: [...sel.graphics] };
-        const arr = hit.kind === 'unit' ? ns.units : ns.graphics;
-        const i = arr.indexOf(hit.id);
-        if (i >= 0) arr.splice(i, 1);
-        else arr.push(hit.id);
-        setSel(ns);
-        gesture.current = g0;
+      // Shift: click toggles the item under the pointer; Shift-drag box-selects (even from inside an area)
+      if (pt.shift && hit?.kind !== 'group') {
+        gesture.current = { ...g0, kind: 'box', additive: sel, toggle: hit ?? undefined };
         return true;
       }
+      if (!hit) return false;
+      const inSel = hit.kind === 'unit' ? sel.units.includes(hit.id) : hit.kind === 'graphic' ? sel.graphics.includes(hit.id) : sel.group === hit.id;
       const ns: Selection = inSel ? sel : hit.kind === 'unit' ? { units: [hit.id], graphics: [] } : hit.kind === 'graphic' ? { units: [], graphics: [hit.id] } : { units: [], graphics: [], group: hit.id };
       setSel(ns);
       setTab('edit');
@@ -470,6 +460,8 @@ export function Planner(p: StepProps) {
       edit((pl) => (msg = dragHandle(pl, g.orig!, g.handle!, g.start, pt.w)));
       setHud(msg ?? null);
     } else if (g.kind === 'box') {
+      if (!g.moved && px < 4) return;
+      g.moved = true;
       setBox({ a: g.start, b: pt.w });
     } else if (g.kind === 'pen' && g.pts) {
       const last = g.pts[g.pts.length - 1];
@@ -499,9 +491,22 @@ export function Planner(p: StepProps) {
       if (snapOf(planRef.current) !== g.before) pushHistory(g.before);
     } else if (g.kind === 'box') {
       setBox(null);
-      const b = boxSelect(plan, visGraphics, g.start, pt.w, { units: layers.units });
       const base = g.additive ?? EMPTY_SEL;
+      if (!g.moved) {
+        const t = g.toggle;
+        if (!t || t.kind === 'group') return;
+        const ns: Selection = { units: [...base.units], graphics: [...base.graphics] };
+        const arr = t.kind === 'unit' ? ns.units : ns.graphics;
+        const i = arr.indexOf(t.id);
+        if (i >= 0) arr.splice(i, 1);
+        else arr.push(t.id);
+        setSel(ns);
+        setTab('edit');
+        return;
+      }
+      const b = boxSelect(plan, visGraphics, g.start, pt.w, { units: layers.units });
       setSel({ units: [...new Set([...base.units, ...b.units])], graphics: [...new Set([...base.graphics, ...b.graphics])] });
+      setTab('edit');
     } else if (g.kind === 'pen' && g.pts) {
       setDraft([]);
       const raw = g.pts;
@@ -527,7 +532,7 @@ export function Planner(p: StepProps) {
       const ry = Math.abs(b.y - a.y) / 2;
       if (rx < 6 * pt.mPerPx && ry < 6 * pt.mPerPx) return;
       const c = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-      addGraphic({ id: uid('g'), kind: 'AREA', pts: eggPoints(c, Math.max(rx, 5), Math.max(ry, 5), 90, 8), props: { color: style.color, width: Math.min(2.5, style.width), dash: style.dash || undefined, smooth: true, fill: true, closed: true } });
+      addGraphic({ id: uid('g'), kind: 'AREA', pts: eggPoints(c, Math.max(rx, 5), Math.max(ry, 5), 0, 8), props: { color: style.color, width: Math.min(2.5, style.width), dash: style.dash || undefined, smooth: true, fill: true, closed: true } });
     }
   };
 

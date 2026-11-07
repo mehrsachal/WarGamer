@@ -84,7 +84,8 @@ function resolveHit(c: Ctx, target: UnitState, p: number, w: Weapon): { hit: boo
   const hit = r < p;
   if (!hit) return { hit, roll: Math.floor(r * 100), effect: 'miss' };
   const tt = c.g.data.unitType(target.typeId);
-  const lethality = w.lethality[tt.targetClass];
+  const base = w.lethality[tt.targetClass];
+  const lethality = base > 0 && target.status === 'S' ? Math.min(1, base + c.g.data.rules.suppression.repeatHitLethality) : base;
   const er = c.roll();
   if (er < lethality) {
     target.steps -= 1;

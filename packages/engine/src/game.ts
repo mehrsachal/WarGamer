@@ -76,6 +76,10 @@ export class Game {
 
   /** Plain-language log items this side is allowed to see. */
   logFor(side: Side): LogItem[] {
-    return filterLog(this.events.flatMap((e) => e.log), side);
+    return filterLog(
+      this.events.flatMap((e) => e.log),
+      side,
+      (t) => this.ctx.data.units.get(t)?.name ?? t,
+    );
   }
 }

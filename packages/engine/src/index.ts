@@ -12,3 +12,8 @@ export * from './events';
 export * from './execute';
 export * from './view';
 export * from './game';
+export * from './ai/perception';
+export * from './ai/deploy';
+export * from './ai/defend';
+export * from './ai/runner';
+export * from './ai/scripted';

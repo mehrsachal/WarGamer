@@ -163,6 +163,8 @@ export const Rules = z.object({
     coverBonus: pct,
     /** Move point multiplier while suppressed. */
     moveFactor: z.number().min(0).max(1),
+    /** Added to weapon lethality when the target is already suppressed (sustained fire breaks units). */
+    repeatHitLethality: pct.default(0),
   }),
   move: z.object({
     /** Share of a unit's move points that keeps it "tactical" (may still fire). Beyond it the unit dashes. */

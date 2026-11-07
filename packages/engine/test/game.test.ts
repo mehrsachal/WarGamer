@@ -304,6 +304,8 @@ describe('fog of war (VIS-03, SET-05, NFR-04)', () => {
     const blueLog = g.logFor('blue');
     for (const l of blueLog) if (l.side === 'red' && l.k === 'move') expect(g.state.visible.blue).toContain(l.unitId);
     expect(g.logFor('red').some((l) => l.k === 'move' && l.unitId === 'r1')).toBe(true);
+    // enemy units are named by type only
+    for (const l of blueLog) if (l.side === 'red' && l.k === 'move') expect(l.name).not.toMatch(/^R /);
   });
 
   it('a unit that fires is revealed to the enemy (VIS-04 firing rule)', () => {

@@ -152,20 +152,38 @@ export function sideView(ctx: GameContext, s: GameState, side: Side): SideView {
   };
 }
 
-/** Log items a side may read, with hidden shooters redacted (CBT-08 under fog of war). */
-export function filterLog(items: readonly LogItem[], side: Side): LogItem[] {
+/**
+ * Log items a side may read (CBT-08 under fog of war): hidden shooters are redacted and enemy units are named
+ * by type only (their ORBAT names are not given away). `typeName` maps a unit type id to its display name.
+ */
+export function filterLog(items: readonly LogItem[], side: Side, typeName: (typeId: string) => string = (t) => t): LogItem[] {
   const out: LogItem[] = [];
   for (const it of items) {
     if (it.side !== side && !it.seenBy.includes(side)) continue;
-    if (it.k === 'fire' && it.side !== side && !it.shooterSeenBy.includes(side)) {
-      out.push({ ...it, shooterId: '', shooterName: '', shooterTypeId: null, from: null });
-      continue;
+    const enemyActor = it.side !== side;
+    switch (it.k) {
+      case 'fire': {
+        let x = { ...it };
+        if (enemyActor && !it.shooterSeenBy.includes(side)) x = { ...x, shooterId: '', shooterName: '', shooterTypeId: null, from: null };
+        else if (enemyActor) x = { ...x, shooterName: it.shooterTypeId ? typeName(it.shooterTypeId) : it.shooterName };
+        if (it.targetSide !== side) x = { ...x, targetName: typeName(it.targetTypeId) };
+        out.push(x);
+        break;
+      }
+      case 'impact':
+        out.push(enemyActor ? { ...it, source: '', sourceName: '' } : it);
+        break;
+      case 'move':
+        out.push(enemyActor ? { ...it, name: typeName(it.typeId) } : it);
+        break;
+      case 'dismount':
+      case 'passenger_loss':
+      case 'mount':
+        out.push(enemyActor ? { ...it, name: '' } : it);
+        break;
+      default:
+        out.push(it);
     }
-    if (it.k === 'impact' && it.side !== side) {
-      out.push({ ...it, source: '', sourceName: '' });
-      continue;
-    }
-    out.push(it);
   }
   return out;
 }

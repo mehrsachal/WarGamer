@@ -1,0 +1,7 @@
+[
+  { "id": "eye", "name": "Unaided eye", "dayRange": 12, "nightRange": 2, "altitude_m": 0, "concealmentFactor": 1, "thermal": false },
+  { "id": "binos", "name": "Binoculars", "dayRange": 20, "nightRange": 3, "altitude_m": 0, "concealmentFactor": 1, "thermal": false },
+  { "id": "nvg", "name": "Night vision goggles", "dayRange": 12, "nightRange": 6, "altitude_m": 0, "concealmentFactor": 1, "thermal": false },
+  { "id": "thermal", "name": "Thermal sight", "dayRange": 25, "nightRange": 20, "altitude_m": 0, "concealmentFactor": 0.6, "thermal": true },
+  { "id": "uav_cam", "name": "UAV camera (EO/IR)", "dayRange": 18, "nightRange": 12, "altitude_m": 150, "concealmentFactor": 0.8, "thermal": true }
+]

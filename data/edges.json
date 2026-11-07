@@ -1,0 +1,11 @@
+[
+  { "id": "road", "name": "Metalled road", "moveCostModifier": { "foot": 0, "wheeled": 0, "tracked": 0 }, "blocksLOS": false, "losHeight_m": 0, "crossableBy": ["foot", "wheeled", "tracked"], "roadCost": { "foot": 0.75, "wheeled": 0.4, "tracked": 0.6 }, "draw": "centerline", "color": "#b8442e", "width": 3 },
+  { "id": "track", "name": "Unmetalled track", "moveCostModifier": { "foot": 0, "wheeled": 0, "tracked": 0 }, "blocksLOS": false, "losHeight_m": 0, "crossableBy": ["foot", "wheeled", "tracked"], "roadCost": { "foot": 0.85, "wheeled": 0.7, "tracked": 0.8 }, "draw": "centerline", "color": "#9a6b3f", "width": 2 },
+  { "id": "canal", "name": "Canal", "moveCostModifier": { "foot": 3, "wheeled": null, "tracked": null }, "blocksLOS": false, "losHeight_m": 0, "crossableBy": ["foot"], "draw": "edge", "color": "#2f6fc0", "width": 5 },
+  { "id": "distributary", "name": "Distributary", "moveCostModifier": { "foot": 1, "wheeled": null, "tracked": 2 }, "blocksLOS": false, "losHeight_m": 0, "crossableBy": ["foot", "tracked"], "draw": "edge", "color": "#4a8ad6", "width": 3 },
+  { "id": "river", "name": "River", "moveCostModifier": { "foot": null, "wheeled": null, "tracked": null }, "blocksLOS": false, "losHeight_m": 0, "crossableBy": [], "draw": "edge", "color": "#1f5ea8", "width": 7 },
+  { "id": "nullah", "name": "Dry nullah", "moveCostModifier": { "foot": 1, "wheeled": 3, "tracked": 1.5 }, "blocksLOS": false, "losHeight_m": 0, "crossableBy": ["foot", "wheeled", "tracked"], "draw": "edge", "color": "#7a5c3a", "width": 3 },
+  { "id": "bund", "name": "Bund / embankment", "moveCostModifier": { "foot": 0.5, "wheeled": 2, "tracked": 1 }, "blocksLOS": true, "losHeight_m": 2.5, "crossableBy": ["foot", "wheeled", "tracked"], "draw": "edge", "color": "#6b5a3e", "width": 3 },
+  { "id": "ridgeline", "name": "Ridgeline (crest)", "moveCostModifier": { "foot": 0, "wheeled": 0, "tracked": 0 }, "blocksLOS": true, "losHeight_m": 1, "crossableBy": ["foot", "wheeled", "tracked"], "draw": "edge", "color": "#8a6a3a", "width": 2 },
+  { "id": "bridge", "name": "Bridge", "moveCostModifier": { "foot": 0, "wheeled": 0, "tracked": 0 }, "blocksLOS": false, "losHeight_m": 0, "crossableBy": ["foot", "wheeled", "tracked"], "providesCrossing": ["foot", "wheeled", "tracked"], "draw": "edge", "color": "#222222", "width": 4 }
+]

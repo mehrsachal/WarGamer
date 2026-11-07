@@ -1,0 +1,37 @@
+{
+  "hit": {
+    "min": 0.01,
+    "max": 0.95,
+    "targetPosture": { "static": 1.0, "moved": 1.15, "dashed": 1.35 },
+    "shooter": { "static": 1.0, "moved": 0.65 },
+    "light": { "day": 1.0, "dusk": 0.8, "night": 0.5, "nightThermal": 0.9 },
+    "weather": { "clear": 1.0, "dust": 0.8, "rain": 0.85, "fog": 0.6, "snow": 0.8 },
+    "unobservedIndirect": 0.4
+  },
+  "suppression": { "recoveryChance": 0.45, "coverBonus": 0.4, "moveFactor": 0.5 },
+  "move": {
+    "tacticalFraction": 0.5,
+    "slopeBands": [
+      { "maxPct": 4, "add": { "foot": 0, "wheeled": 0, "tracked": 0 } },
+      { "maxPct": 10, "add": { "foot": 0.5, "wheeled": 1, "tracked": 0.5 } },
+      { "maxPct": 20, "add": { "foot": 1, "wheeled": 2.5, "tracked": 1.5 } },
+      { "maxPct": 35, "add": { "foot": 2, "wheeled": null, "tracked": 3 } },
+      { "maxPct": 1000, "add": { "foot": 3, "wheeled": null, "tracked": null } }
+    ],
+    "mountCost": 2,
+    "dismountCostFraction": 1
+  },
+  "los": { "hexTargetHeight_m": 1.0 },
+  "visibility": {
+    "weatherRange": { "clear": 1.0, "dust": 0.6, "rain": 0.8, "fog": 0.35, "snow": 0.7 },
+    "duskRange": 0.5,
+    "movingConcealment": 0.4,
+    "autoSpotRange": 1,
+    "firingReveals": true
+  },
+  "indirect": { "requireObserver": true },
+  "passengers": { "lossChanceOnVehicleKill": 0.5 },
+  "stacking": { "maxUnitsPerHex": 3 },
+  "fire": { "shotsPerTurn": 1 },
+  "scoring": { "objectiveWeight": 1, "killWeightPerStep": 1, "lossWeightPerStep": 1 }
+}

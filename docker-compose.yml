@@ -1,0 +1,16 @@
+# docker compose up -d   →  http://<server-ip>:8080 on the LAN
+# Real terrain / ORBAT packs live outside the repo (NFR-02): mount them over /app/data, /app/maps, /app/scenarios.
+services:
+  tht:
+    build: .
+    image: tactical-hex-trainer:0.1
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - tht-db:/var/lib/tht
+      # - /srv/tht-packs/data:/app/data:ro
+      # - /srv/tht-packs/maps:/app/maps:ro
+      # - /srv/tht-packs/scenarios:/app/scenarios:ro
+volumes:
+  tht-db:

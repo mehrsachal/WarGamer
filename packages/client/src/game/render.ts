@@ -53,6 +53,30 @@ export interface Scene {
   grid: boolean;
   labels: boolean;
   turn: number;
+  /** Analyser layers (terrain & plan analyser). */
+  overlay?: Overlay;
+}
+
+export interface Overlay {
+  /** Per-hex value 0..1 drawn on a colour ramp. */
+  heat?: { values: Record<string, number>; ramp: 'value' | 'slope' } | null;
+  fills?: { keys: Iterable<string>; style: string }[];
+  lines?: { hexes: Hex[]; color: string; width?: number; dash?: number[]; label?: string; arrow?: boolean }[];
+  markers?: { hex: Hex; label: string; color: string; shape: 'circle' | 'square' | 'diamond' | 'triangle'; size?: number; ring?: number }[];
+  polygon?: Hex[];
+}
+
+const RAMPS: Record<'value' | 'slope', [number, number, number][]> = {
+  value: [[255, 255, 204], [253, 174, 97], [215, 48, 39], [120, 0, 60]],
+  slope: [[237, 248, 233], [116, 196, 118], [35, 139, 69], [0, 68, 27]],
+};
+function rampColor(ramp: 'value' | 'slope', t: number, a: number): string {
+  const r = RAMPS[ramp];
+  const x = Math.max(0, Math.min(0.9999, t)) * (r.length - 1);
+  const i = Math.floor(x);
+  const f = x - i;
+  const c = r[i].map((v, j) => Math.round(v + (r[i + 1][j] - v) * f));
+  return `rgba(${c[0]},${c[1]},${c[2]},${a})`;
 }
 
 export const SIDE_COLORS: Record<Side, { fill: string; edge: string; text: string }> = {
@@ -461,6 +485,7 @@ export class MapRenderer {
       fillHexes(dash, 'rgba(30,160,60,0.38)');
     }
     if (scene.targets) fillHexes(scene.targets, 'rgba(220,40,40,0.09)');
+    if (scene.overlay) this.drawOverlay(g, scene.overlay, fillHexes, hp);
     // map labels
     if (scene.labels) {
       for (const l of this.map.def.labels) {
@@ -567,6 +592,121 @@ export class MapRenderer {
       }
     }
     return animating;
+  }
+
+  private drawOverlay(g: CanvasRenderingContext2D, o: Overlay, fillHexes: (keys: Iterable<string>, style: string) => void, hp: number): void {
+    if (o.heat) {
+      const buckets = new Map<string, string[]>();
+      for (const [k, v] of Object.entries(o.heat.values)) {
+        const style = rampColor(o.heat.ramp, Math.round(v * 12) / 12, 0.55);
+        buckets.set(style, [...(buckets.get(style) ?? []), k]);
+      }
+      for (const [style, keys] of buckets) fillHexes(keys, style);
+    }
+    for (const f of o.fills ?? []) fillHexes(f.keys, f.style);
+    for (const l of o.lines ?? []) {
+      if (l.hexes.length < 2) continue;
+      g.strokeStyle = l.color;
+      g.lineWidth = l.width ?? 3;
+      g.lineJoin = 'round';
+      g.setLineDash(l.dash ?? []);
+      g.beginPath();
+      l.hexes.forEach((h, i) => {
+        const p = this.toScreen(this.centre(h));
+        if (i) g.lineTo(p.x, p.y);
+        else g.moveTo(p.x, p.y);
+      });
+      g.stroke();
+      g.setLineDash([]);
+      const end = this.toScreen(this.centre(l.hexes[l.hexes.length - 1]));
+      if (l.arrow) {
+        const prev = this.toScreen(this.centre(l.hexes[Math.max(0, l.hexes.length - 3)]));
+        const a = Math.atan2(end.y - prev.y, end.x - prev.x);
+        const s = Math.max(8, hp * 0.3);
+        g.fillStyle = l.color;
+        g.beginPath();
+        g.moveTo(end.x, end.y);
+        g.lineTo(end.x - s * Math.cos(a - 0.45), end.y - s * Math.sin(a - 0.45));
+        g.lineTo(end.x - s * Math.cos(a + 0.45), end.y - s * Math.sin(a + 0.45));
+        g.closePath();
+        g.fill();
+      }
+      if (l.label) {
+        const mid = this.toScreen(this.centre(l.hexes[Math.floor(l.hexes.length / 2)]));
+        this.tag(g, l.label, mid.x, mid.y, l.color);
+      }
+    }
+    if (o.polygon && o.polygon.length) {
+      g.strokeStyle = '#ffe14d';
+      g.lineWidth = 2;
+      g.setLineDash([6, 4]);
+      g.beginPath();
+      o.polygon.forEach((h, i) => {
+        const p = this.toScreen(this.centre(h));
+        if (i) g.lineTo(p.x, p.y);
+        else g.moveTo(p.x, p.y);
+      });
+      if (o.polygon.length > 2) g.closePath();
+      g.stroke();
+      g.setLineDash([]);
+      for (const h of o.polygon) {
+        const p = this.toScreen(this.centre(h));
+        g.fillStyle = '#ffe14d';
+        g.fillRect(p.x - 3, p.y - 3, 6, 6);
+      }
+    }
+    for (const m of o.markers ?? []) {
+      const p = this.toScreen(this.centre(m.hex));
+      if (p.x < -50 || p.y < -50 || p.x > this.w + 50 || p.y > this.h + 50) continue;
+      if (m.ring) {
+        g.strokeStyle = m.color;
+        g.globalAlpha = 0.5;
+        g.lineWidth = 1.5;
+        g.setLineDash([3, 3]);
+        g.beginPath();
+        g.arc(p.x, p.y, m.ring * this.spacing * this.cam.zoom, 0, Math.PI * 2);
+        g.stroke();
+        g.setLineDash([]);
+        g.globalAlpha = 1;
+      }
+      const r = Math.max(5, hp * 0.22) * (m.size ?? 1);
+      g.fillStyle = m.color;
+      g.strokeStyle = '#fff';
+      g.lineWidth = 1.5;
+      g.beginPath();
+      if (m.shape === 'circle') g.arc(p.x, p.y, r, 0, Math.PI * 2);
+      else if (m.shape === 'square') g.rect(p.x - r, p.y - r, 2 * r, 2 * r);
+      else if (m.shape === 'diamond') {
+        g.moveTo(p.x, p.y - r * 1.2);
+        g.lineTo(p.x + r * 1.2, p.y);
+        g.lineTo(p.x, p.y + r * 1.2);
+        g.lineTo(p.x - r * 1.2, p.y);
+        g.closePath();
+      } else {
+        g.moveTo(p.x, p.y - r * 1.2);
+        g.lineTo(p.x + r * 1.1, p.y + r * 0.8);
+        g.lineTo(p.x - r * 1.1, p.y + r * 0.8);
+        g.closePath();
+      }
+      g.fill();
+      g.stroke();
+      if (m.label && hp > 14) this.tag(g, m.label, p.x, p.y - r - 9, m.color);
+    }
+  }
+
+  private tag(g: CanvasRenderingContext2D, text: string, x: number, y: number, color: string): void {
+    g.font = '700 11px system-ui, sans-serif';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    const w = g.measureText(text).width + 8;
+    g.fillStyle = 'rgba(16,22,27,0.82)';
+    g.fillRect(x - w / 2, y - 8, w, 16);
+    g.strokeStyle = color;
+    g.lineWidth = 1;
+    g.strokeRect(x - w / 2, y - 8, w, 16);
+    g.fillStyle = '#fff';
+    g.fillText(text, x, y);
+    g.textBaseline = 'alphabetic';
   }
 
   private flag(g: CanvasRenderingContext2D, o: ObjectiveView, hp: number): void {

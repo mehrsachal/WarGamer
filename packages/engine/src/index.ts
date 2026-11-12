@@ -17,3 +17,6 @@ export * from './ai/deploy';
 export * from './ai/defend';
 export * from './ai/runner';
 export * from './ai/scripted';
+export * from './analysis/params';
+export * from './analysis/analyse';
+export * from './analysis/export';

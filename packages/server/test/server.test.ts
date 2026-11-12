@@ -31,6 +31,9 @@ describe('content API (SET-01)', () => {
     expect((await app.inject('/api/maps/ridgeline')).json().hexes.length).toBe(44 * 32);
     expect((await app.inject('/api/data')).json().units.length).toBeGreaterThan(10);
     expect((await app.inject('/api/maps/nope')).statusCode).toBe(404);
+    const mapList = (await app.inject('/api/maps')).json() as { id: string; hasBorder: boolean }[];
+    expect(mapList.find((m) => m.id === 'mtn-kafir-ridge')?.hasBorder).toBe(true);
+    expect((await app.inject('/api/analysis-params')).json().mountain.modes.mountain).toBeTruthy();
     // the pre-game scenario for blue does not contain red's ORBAT
     const pub = (await app.inject('/api/scenarios/ridgeline-coy-attack?side=blue')).json();
     expect(pub.scenario.sides.red.orbat).toEqual([]);

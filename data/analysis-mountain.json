@@ -1,0 +1,69 @@
+{
+  "source": "PLACEHOLDER values (approximate, open-source style) — replace with the Mountain Warfare GSP figures on the institution's own server",
+  "terrain": {
+    "dominanceRadius": 6,
+    "nullahMinCatchment": 30,
+    "ridgeMinRise_m": 8,
+    "ridgeMinLength": 5,
+    "observationRange": 25,
+    "valueWeights": { "dominance": 0.3, "observation": 0.35, "defensibility": 0.2, "access": 0.15 }
+  },
+  "itg": {
+    "maxItgs": 10,
+    "minSpacing_hex": 7,
+    "minValue": 0.4,
+    "crestDrop_m": 25,
+    "forceBySize": [
+      { "maxHexes": 2, "force": "section" },
+      { "maxHexes": 7, "force": "platoon" },
+      { "maxHexes": 20, "force": "company" },
+      { "maxHexes": 9999, "force": "battalion" }
+    ],
+    "mutualSupport_hex": 10
+  },
+  "approaches": { "max": 5, "separationPenalty": 4, "separation_hex": 3, "minutesPerMP": 1.5 },
+  "infiltration": { "routes": 3, "exposurePenalty": 6, "nightObservation_hex": 4 },
+  "modes": {
+    "forward": {
+      "label": "Forward defence",
+      "description": "Main positions close to the border; continuous posts; little depth.",
+      "mainPositions_m": [0, 600],
+      "postSpacing_m": 500,
+      "posts_m": [0, 300],
+      "preferRidges": false,
+      "postsAtCrossings": true,
+      "reserveDepth_m": 1200
+    },
+    "normal": {
+      "label": "Normal defence",
+      "description": "Posts as a screen on the border; main positions on key ground in depth.",
+      "mainPositions_m": [600, 2000],
+      "postSpacing_m": 1000,
+      "posts_m": [0, 400],
+      "preferRidges": false,
+      "postsAtCrossings": true,
+      "reserveDepth_m": 2500
+    },
+    "mountain": {
+      "label": "Normal defence in mountains",
+      "description": "Positions on dominating ridges and spurs covering the valleys; posts on passes and nullah heads.",
+      "mainPositions_m": [200, 2000],
+      "postSpacing_m": 800,
+      "posts_m": [0, 500],
+      "preferRidges": true,
+      "postsAtCrossings": true,
+      "reserveDepth_m": 2500
+    }
+  },
+  "force": {
+    "label": "Infantry battalion (training ORBAT)",
+    "companies": 3,
+    "platoonsPerCompany": 3,
+    "reserveCompanies": 1,
+    "weapons": { "mmg": 6, "hmg": 2, "atgm": 4, "rcl": 2 },
+    "mortars": { "mortar81": 3, "mortar120": 2 },
+    "coyHqDepth_m": [300, 700]
+  },
+  "surveillance": { "range_hex": 20, "minGap_m": 200 },
+  "ratings": { "good": 0.62, "adequate": 0.42 }
+}

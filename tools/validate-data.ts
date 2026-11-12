@@ -1,7 +1,7 @@
 // Validates every data file, map and scenario (ED-04 / ED-06). Exit code 1 on any problem.
 //   npm run validate:data
 import { readFileSync, readdirSync } from 'node:fs';
-import { type DataBundle, MapModel, Ruleset, validateScenario } from '../packages/engine/src/index';
+import { AnalysisParams, type DataBundle, MapModel, Ruleset, validateScenario } from '../packages/engine/src/index';
 
 const root = new URL('../', import.meta.url);
 const read = (f: string) => JSON.parse(readFileSync(new URL(f, root), 'utf8'));
@@ -34,6 +34,19 @@ try {
       bad++;
       console.error(`FAIL scenario ${f}:\n  - ${v.errors.join('\n  - ')}`);
     } else console.log(`ok   scenario ${v.scenario!.id}`);
+  }
+  for (const f of readdirSync(new URL('data/', root)).filter((x) => x.startsWith('analysis-'))) {
+    const r = AnalysisParams.safeParse(read(`data/${f}`));
+    if (!r.success) {
+      bad++;
+      console.error(`FAIL ${f}:\n  - ${r.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('\n  - ')}`);
+      continue;
+    }
+    const missing = [...Object.keys(r.data.force.weapons), ...Object.keys(r.data.force.mortars)].filter((w) => !data.weapons.has(w));
+    if (missing.length) {
+      bad++;
+      console.error(`FAIL ${f}: unknown weapons ${missing.join(', ')}`);
+    } else console.log(`ok   analysis params ${f}`);
   }
 } catch (e) {
   bad++;

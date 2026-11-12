@@ -32,6 +32,12 @@ export function Home(p: { onOpen(id: string): void; onResume(gameId: string): vo
           </button>
         ))}
       </div>
+      <h2>Terrain &amp; plan analyser</h2>
+      <button className="rrow" onClick={() => (location.hash = '/analyser')} data-testid="open-analyser">
+        <b>Mountain border sectors (fictional)</b>
+        <span className="muted small">Ridgelines, key ground, approaches, deployment in three modes, weapon and mortar siting, border surveillance, enemy infiltration and attack options — rated, with GeoJSON / CSV export.</span>
+        <span className="btn">Open</span>
+      </button>
       <h2>{t('home.resume')}</h2>
       {!games.length && <p className="muted">{t('home.noGames')}</p>}
       <div className="resume">

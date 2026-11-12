@@ -133,3 +133,19 @@ kbd { background: #24313b; border: 1px solid #3a4a56; border-radius: 4px; paddin
   .bb-buttons .btn { padding: 5px 6px; font-size: 12px; }
   .readout { font-size: 11px; }
 }
+
+/* Terrain & plan analyser */
+.analyser .sel { width: auto; max-width: 220px; }
+.analyser .left-col { width: 250px; }
+.analyser .an-right { width: 400px; }
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 4px; }
+.chip.on { background: #2b6cb0; border-color: #3b82c9; }
+.rbadge { display: inline-block; color: #fff; font-weight: 800; font-size: 11px; border-radius: 4px; padding: 0 6px; text-transform: uppercase; white-space: nowrap; }
+.item { padding: 5px 0; border-bottom: 1px solid var(--line); }
+.item-h { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.rec { padding: 4px 6px; margin: 3px 0; border-left: 3px solid; background: rgba(255, 255, 255, 0.03); }
+.rec-critical { border-color: var(--bad); }
+.rec-warn { border-color: #e0a526; }
+.rec-info { border-color: #3b82c9; }
+.stats td { padding: 1px 0; }
+.tbl tr.clickable:hover, .item.clickable:hover { background: rgba(255, 255, 255, 0.05); }

@@ -14,6 +14,7 @@ import {
   hexLine,
   hexNeighbors,
   hexToPoint,
+  hexDistance,
   offsetToAxial,
 } from '../packages/engine/src/index';
 
@@ -229,7 +230,165 @@ function perf100(): GameMap {
   return finish(b);
 }
 
-for (const m of [ridgeline(), perf100()]) {
+// ---------------------------------------------------------------- fictional mountain border sectors (IN-2 / IN-3)
+interface MtnSpec {
+  id: string;
+  name: string;
+  elev: (x: number, y: number, n: Noise) => number;
+  /** 'crest' = border follows the watershed in rows [r0, r1]; otherwise a fixed wavy row. */
+  border: { kind: 'crest'; r0: number; r1: number } | { kind: 'row'; row: (col: number) => number };
+  villages: [number, number, string][];
+  tracks: [number, number][][];
+  pass?: [number, number, string];
+}
+
+function mountain(spec: MtnSpec): GameMap {
+  const COLS = 60;
+  const ROWS = 48;
+  const b = builder(spec.id, spec.name, COLS, ROWS, 100, { easting: 512000, northing: 3810000 });
+  b.def.terrainClass = 'mountain';
+  b.def.classification = 'UNCLASSIFIED — FICTIONAL TRAINING SECTOR';
+  const n = new Noise(spec.id);
+  for (const c of b.cells.values()) {
+    const p = b.pos(c);
+    c.elevation_m = spec.elev(p.x, p.y, n);
+  }
+  // terrain from altitude, slope and aspect
+  for (const c of b.cells.values()) {
+    const p = b.pos(c);
+    let maxRise = 0;
+    let northFacing = 0;
+    for (const nb of hexNeighbors(c)) {
+      const o = b.cells.get(hexKey(nb));
+      if (!o) continue;
+      maxRise = Math.max(maxRise, Math.abs(o.elevation_m - c.elevation_m));
+      const q = b.pos(nb);
+      if (q.y < p.y) northFacing += o.elevation_m - c.elevation_m < 0 ? 1 : 0;
+    }
+    const slope = maxRise / 100;
+    const e = c.elevation_m;
+    const rnd = n.at(p.x + 777, p.y - 333, 220);
+    let t = 'open';
+    if (e > 3500) t = 'snow';
+    else if (slope > 1.1) t = 'scree';
+    else if (slope > 0.8 || (e > 3200 && rnd > 0.4)) t = 'rocky';
+    else if (e > 2200 && e < 3200 && (rnd > 0.45 || (northFacing >= 2 && rnd > 0.3))) t = 'woods';
+    else if (e < 2300 && slope < 0.15 && rnd > 0.5) t = 'crops';
+    else if (rnd > 0.62) t = 'scrub';
+    c.terrainId = t;
+  }
+  // border line
+  const line: Hex[] = [];
+  for (let col = 0; col < COLS; col++) {
+    let row: number;
+    if (spec.border.kind === 'crest') {
+      const { r0, r1 } = spec.border;
+      row = r0;
+      let best = -Infinity;
+      for (let r = r0; r <= r1; r++) {
+        const e = b.cells.get(hexKey(at(col, r)))!.elevation_m;
+        if (e > best) {
+          best = e;
+          row = r;
+        }
+      }
+    } else row = Math.round(spec.border.row(col));
+    const h = at(col, row);
+    if (line.length) {
+      const seg = hexLine(line[line.length - 1], h);
+      for (const x of seg.slice(1)) line.push(x);
+    } else line.push(h);
+  }
+  b.def.border = { hexes: line.map((h) => ({ q: h.q, r: h.r })), ownRef: at(COLS >> 1, ROWS - 1), enemyRef: at(COLS >> 1, 0) };
+  for (const [col, row, name] of spec.villages) {
+    const vc = b.pos(at(col, row));
+    for (const c of b.cells.values()) {
+      const p = b.pos(c);
+      if (Math.hypot(p.x - vc.x, p.y - vc.y) < 130) c.terrainId = 'village';
+    }
+    b.def.labels.push({ ...at(col, row), text: name, kind: 'village' });
+  }
+  for (const t of spec.tracks) road(b, t.map(([c, r]) => at(c, r)), 'track');
+  if (spec.pass) b.def.labels.push({ ...at(spec.pass[0], spec.pass[1]), text: spec.pass[2], kind: 'feature' });
+  // named heights: the highest local maxima, at least 1.2 km apart
+  const peaks = [...b.cells.values()]
+    .filter((c) => hexNeighbors(c).every((nb) => (b.cells.get(hexKey(nb))?.elevation_m ?? -1) <= c.elevation_m))
+    .sort((a, z) => z.elevation_m - a.elevation_m);
+  const named: MapHex[] = [];
+  for (const pk of peaks) {
+    if (named.length >= 6) break;
+    if (named.some((o) => hexDistance(o, pk) < 12)) continue;
+    named.push(pk);
+    b.def.labels.push({ q: pk.q, r: pk.r, text: `Pt ${Math.round(pk.elevation_m)}`, kind: 'height' });
+  }
+  return finish(b);
+}
+
+const gauss = (d: number, w: number) => Math.exp(-((d / w) ** 2));
+
+const mtnSectors: MtnSpec[] = [
+  {
+    id: 'mtn-kafir-ridge',
+    name: 'Kafir Ridge sector (fictional, mountain)',
+    elev: (x, y, n) => {
+      const crest = 1500 + 220 * Math.sin(x / 900);
+      const pass = -520 * gauss(x - 3000, 380);
+      let e = 2400 + (1250 + pass) * gauss(y - crest, 950);
+      // spurs running south from the main ridge, with valleys between them
+      const spur = Math.cos((x / 1500) * Math.PI * 2);
+      if (y > crest) e += 330 * spur * Math.min(1, (y - crest) / 900) * gauss(y - crest - 1300, 1300);
+      return e + 160 * n.fbm(x, y, 900) + 60 * n.at(x, y, 250) - 0.12 * y;
+    },
+    border: { kind: 'crest', r0: 9, r1: 22 },
+    villages: [
+      [12, 42, 'Gurez Bala'],
+      [44, 40, 'Dawar'],
+      [30, 3, 'Shaltar (enemy)'],
+    ],
+    tracks: [
+      [[12, 47], [12, 42], [22, 34], [30, 24], [34, 16], [32, 8], [30, 3]],
+      [[44, 47], [44, 40], [36, 30], [30, 24]],
+    ],
+    pass: [34, 16, 'Kafir Gali (pass)'],
+  },
+  {
+    id: 'mtn-shandur-valley',
+    name: 'Shandur Nala valley sector (fictional, mountain)',
+    elev: (x, y, n) => {
+      const xv = 2600 + 350 * Math.sin(y / 800);
+      const walls = 1150 * (1 - gauss(x - xv, 850));
+      const side = 260 * Math.cos(y / 520) * (1 - gauss(x - xv, 600));
+      return 1900 + 0.18 * (4800 - y) * 0.6 + walls + side + 220 * n.fbm(x, y, 1000) + 50 * n.at(x, y, 240);
+    },
+    border: { kind: 'row', row: (c) => 15 + 3 * Math.sin(c / 7) },
+    villages: [
+      [30, 40, 'Kel'],
+      [31, 27, 'Dosut'],
+      [29, 4, 'Taobat (enemy)'],
+    ],
+    tracks: [[[30, 47], [30, 40], [31, 27], [30, 16], [29, 4], [29, 0]]],
+  },
+  {
+    id: 'mtn-twin-peaks',
+    name: 'Twin Peaks saddle sector (fictional, mountain)',
+    elev: (x, y, n) => {
+      const d1 = Math.hypot(x - 1400, (y - 1700) * 1.2);
+      const d2 = Math.hypot(x - 4400, (y - 1800) * 1.2);
+      const saddle = 700 * gauss(y - 1750, 700) * gauss(x - 2900, 1200);
+      return 2100 + 1800 * gauss(d1, 1200) + 1600 * gauss(d2, 1100) + saddle + 200 * n.fbm(x, y, 800) + 50 * n.at(x, y, 220) - 0.1 * y;
+    },
+    border: { kind: 'crest', r0: 10, r1: 24 },
+    villages: [
+      [28, 41, 'Chhota Dara'],
+      [8, 44, 'Sonmarg Khurd'],
+      [30, 4, 'Kanzalwan (enemy)'],
+    ],
+    tracks: [[[28, 47], [28, 41], [29, 30], [30, 18], [30, 4], [30, 0]]],
+    pass: [30, 18, 'Twin Saddle'],
+  },
+];
+
+for (const m of [ridgeline(), perf100(), ...mtnSectors.map(mountain)]) {
   writeFileSync(`${OUT}${m.id}.json`, JSON.stringify(m));
   const counts: Record<string, number> = {};
   for (const h of m.hexes) counts[h.terrainId] = (counts[h.terrainId] ?? 0) + 1;

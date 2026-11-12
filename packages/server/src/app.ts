@@ -89,6 +89,12 @@ export async function buildApp(opts: AppOptions): Promise<{ app: FastifyInstance
     return { summary: scenarioSummary(s), scenario: publicScenario(s, side) };
   });
 
+  app.get('/api/maps', async () =>
+    [...content.maps.values()].map((m) => ({ id: m.def.id, name: m.def.name, width: m.def.width, height: m.def.height, terrainClass: m.def.terrainClass ?? 'plains', hasBorder: !!m.def.border, classification: m.def.classification })),
+  );
+
+  app.get('/api/analysis-params', async () => Object.fromEntries(content.analysisParams));
+
   app.get<{ Params: { id: string } }>('/api/maps/:id', async (req, reply) => {
     const m = content.rawMaps.get(req.params.id);
     if (!m) throw new GameError(404, 'map_not_found');

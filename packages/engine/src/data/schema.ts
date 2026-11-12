@@ -231,6 +231,16 @@ export const GameMap = z.object({
   gridRefOrigin: z.object({ easting: z.number(), northing: z.number() }),
   labels: z.array(MapLabel).default([]),
   classification: z.string().default('UNCLASSIFIED — FICTIONAL'),
+  /** Optional border / line of control: contiguous line hexes plus one reference hex on each side. */
+  border: z
+    .object({
+      hexes: z.array(z.object({ q: z.number().int(), r: z.number().int() })).min(2),
+      ownRef: z.object({ q: z.number().int(), r: z.number().int() }),
+      enemyRef: z.object({ q: z.number().int(), r: z.number().int() }),
+    })
+    .optional(),
+  /** Terrain class used to pick analysis defaults. */
+  terrainClass: z.enum(['plains', 'mountain', 'desert']).optional(),
 });
 export type GameMap = z.infer<typeof GameMap>;
 

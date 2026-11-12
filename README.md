@@ -58,6 +58,16 @@ lives in the `tht-db` volume.
 
 Full rules, with every table generated from the data files: [`docs/rules.md`](docs/rules.md).
 
+## Terrain & plan analyser (training aid)
+
+From the home page, **Terrain & plan analyser** runs an automatic appreciation of a fictional mountain border
+sector: ridgelines, nullahs, key ground (ITGs) with the force each needs, approaches and dead ground, own
+deployment in three modes (forward / normal / normal defence in mountains) with posts, weapon and mortar sites,
+border surveillance gaps, enemy infiltration routes and 3–4 attack options — each rated *good / adequate /
+not good* with recommendations, shown as map layers and exportable as GeoJSON / CSV. Three sample sectors:
+`mtn-kafir-ridge`, `mtn-shandur-valley`, `mtn-twin-peaks`. Parameters live in `data/analysis-mountain.json`
+and are placeholders for the institution's own figures. Details: [`docs/analyser.md`](docs/analyser.md).
+
 ## Architecture (spec §2)
 
 ```
@@ -72,6 +82,7 @@ packages/engine   @tht/engine — pure TypeScript rules engine, no I/O, determin
   src/game.ts           Game: dispatch, replay, dice verification
   src/view.ts           per-side filtered view and redacted log (SET-05, NFR-04)
   src/ai/               defensive AI (AI-01/02/05) and scripted test players
+  src/analysis/         terrain & plan analyser (params schema, analysis, GeoJSON/CSV export)
 packages/server   Node + Fastify + WebSocket + SQLite (node:sqlite); authoritative; AI runs server-side
 packages/client   React + Canvas renderer (tiled terrain cache), milsymbol APP-6 counters, i18n strings
 data/ maps/ scenarios/   sample content (fictional)

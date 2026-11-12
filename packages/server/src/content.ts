@@ -2,13 +2,15 @@
 // from outside the repo at deploy time — NFR-02).
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { type DataBundle, type GameContext, MapModel, Ruleset, type Scenario, type Side, validateScenario } from '@tht/engine';
+import { AnalysisParams, type DataBundle, type GameContext, MapModel, Ruleset, type Scenario, type Side, validateScenario } from '@tht/engine';
 
 export interface Content {
   data: Ruleset;
   maps: Map<string, MapModel>;
   scenarios: Map<string, Scenario>;
   rawMaps: Map<string, unknown>;
+  /** Terrain-analyser parameter sets (data/analysis-*.json), by file stem. */
+  analysisParams: Map<string, AnalysisParams>;
   context(scenarioId: string): GameContext;
 }
 
@@ -43,9 +45,16 @@ export function loadContent(root: string, log: (m: string) => void = () => {}): 
       scenarios.set(v.scenario.id, v.scenario);
     }
   }
+  const analysisParams = new Map<string, AnalysisParams>();
+  for (const f of readdirSync(join(root, 'data')).filter((x) => x.startsWith('analysis-') && x.endsWith('.json')).sort()) {
+    const r = AnalysisParams.safeParse(readJson(join(root, 'data', f)));
+    if (r.success) analysisParams.set(f.replace(/^analysis-|\.json$/g, ''), r.data);
+    else log(`${f} invalid — skipped: ${r.error.issues.map((i) => i.path.join('.') + ' ' + i.message).join('; ')}`);
+  }
   return {
     data,
     maps,
+    analysisParams,
     scenarios,
     rawMaps,
     context(id: string): GameContext {
